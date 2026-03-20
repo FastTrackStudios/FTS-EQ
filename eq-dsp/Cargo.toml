@@ -1,0 +1,28 @@
+[package]
+name = "eq-dsp"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+description = "EQ processing engine — parametric bands, shelves, filters composed from fts-dsp"
+
+[features]
+default = []
+test-util = ["rustfft"]
+
+[dependencies]
+fts-dsp = { path = "../../fts-dsp" }
+rustfft = { version = "6.2", optional = true }
+
+[dev-dependencies]
+eq-dsp = { path = ".", features = ["test-util"] }
+rustfft = "6.2"
+hound = "3.5"
+criterion = "0.5"
+
+[[bench]]
+name = "throughput"
+harness = false
+
+[[example]]
+name = "process_wav"

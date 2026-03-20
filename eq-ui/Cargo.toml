@@ -1,0 +1,13 @@
+[package]
+name = "eq-ui"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+description = "EQ GUI — control view (spectrum + nodes) and profile theme rendering"
+
+[dependencies]
+audio-gui = { workspace = true }
+fts-plugin-core = { path = "../../fts-plugin-core" }
+eq-dsp = { path = "../eq-dsp" }
+eq-profiles = { path = "../eq-profiles" }
