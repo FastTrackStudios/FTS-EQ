@@ -7,11 +7,14 @@ edition.workspace = true
 description = "FTS EQ — CLAP/VST3 audio plugin entry point"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "lib"]
 
 [dependencies]
+audio-gui = { workspace = true }
 fts-plugin-core = { path = "../../fts-plugin-core" }
 eq-dsp = { path = "../eq-dsp" }
 eq-profiles = { path = "../eq-profiles" }
 eq-ui = { path = "../eq-ui" }
+fts-dsp = { workspace = true }
 nih_plug = { workspace = true }
+atomic_float = { workspace = true }
