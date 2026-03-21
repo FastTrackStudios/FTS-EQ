@@ -138,6 +138,9 @@ pub fn App() -> Element {
                     sample_rate: sample_rate,
                     spectrum_db: spectrum,
                     focused_band_out: focused_band,
+                    // Window is 1000x600; header ~33px, bottom bar ~52px
+                    rendered_width: 1000.0,
+                    rendered_height: 515.0,
 
                     on_band_change: {
                         let ctx = ctx.clone();
