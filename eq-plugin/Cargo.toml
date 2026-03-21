@@ -18,3 +18,4 @@ eq-ui = { path = "../eq-ui" }
 fts-dsp = { workspace = true }
 nih_plug = { workspace = true }
 atomic_float = { workspace = true }
+rustfft = "6"

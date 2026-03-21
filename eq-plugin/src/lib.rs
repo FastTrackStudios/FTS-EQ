@@ -5,6 +5,7 @@
 
 use atomic_float::AtomicF32;
 use fts_plugin_core::prelude::*;
+use rustfft::{num_complex::Complex, FftPlanner};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -19,6 +20,12 @@ mod editor;
 /// Number of parametric bands (Pro-Q style).
 pub const NUM_BANDS: usize = 24;
 
+/// FFT size for spectrum analysis.
+const FFT_SIZE: usize = 4096;
+
+/// Number of logarithmically-spaced spectrum bins for the UI.
+pub const SPECTRUM_BINS: usize = 256;
+
 // ── Shared UI State ─────────────────────────────────────────────────
 
 /// Audio-thread → UI metering data.
@@ -28,6 +35,10 @@ pub struct EqUiState {
     pub input_peak_db: AtomicF32,
     /// Peak output level in dB.
     pub output_peak_db: AtomicF32,
+    /// Current sample rate from the host.
+    pub sample_rate: AtomicF32,
+    /// Spectrum analyzer bins (logarithmically spaced, in dB).
+    pub spectrum_bins: Box<[AtomicF32; SPECTRUM_BINS]>,
 }
 
 impl EqUiState {
@@ -36,6 +47,8 @@ impl EqUiState {
             params,
             input_peak_db: AtomicF32::new(-100.0),
             output_peak_db: AtomicF32::new(-100.0),
+            sample_rate: AtomicF32::new(48000.0),
+            spectrum_bins: Box::new(std::array::from_fn(|_| AtomicF32::new(-100.0))),
         }
     }
 }
@@ -183,6 +196,10 @@ struct FtsEq {
     editor_state: Arc<DioxusState>,
     chain: EqChain,
     sample_rate: f64,
+    // Spectrum analysis state
+    fft_buffer: Vec<f32>,
+    fft_pos: usize,
+    fft_window: Vec<f32>,
 }
 
 impl Default for FtsEq {
@@ -194,12 +211,22 @@ impl Default for FtsEq {
         for _ in 0..NUM_BANDS {
             chain.add_band();
         }
+        // Hann window for FFT
+        let fft_window: Vec<f32> = (0..FFT_SIZE)
+            .map(|i| {
+                let t = i as f32 / (FFT_SIZE - 1) as f32;
+                0.5 * (1.0 - (2.0 * std::f32::consts::PI * t).cos())
+            })
+            .collect();
         Self {
             params,
             ui_state,
             editor_state: DioxusState::new(|| (1000, 600)),
             chain,
             sample_rate: 48000.0,
+            fft_buffer: vec![0.0; FFT_SIZE],
+            fft_pos: 0,
+            fft_window,
         }
     }
 }
@@ -252,6 +279,71 @@ impl FtsEq {
     }
 }
 
+impl FtsEq {
+    /// Run FFT on accumulated buffer and write spectrum bins to UI state.
+    fn run_spectrum_fft(&mut self) {
+        let mut planner = FftPlanner::<f32>::new();
+        let fft = planner.plan_fft_forward(FFT_SIZE);
+
+        // Apply window and convert to complex
+        let mut complex_buf: Vec<Complex<f32>> = self
+            .fft_buffer
+            .iter()
+            .zip(self.fft_window.iter())
+            .map(|(&s, &w)| Complex::new(s * w, 0.0))
+            .collect();
+
+        fft.process(&mut complex_buf);
+
+        // Convert to magnitude dB, only first half (Nyquist)
+        let half = FFT_SIZE / 2;
+        let sr = self.sample_rate as f32;
+        let bin_hz = sr / FFT_SIZE as f32;
+        let min_freq: f32 = 20.0;
+        let max_freq: f32 = 20000.0;
+        let log_min = min_freq.log10();
+        let log_max = max_freq.log10();
+
+        // Map logarithmically-spaced UI bins to FFT bins
+        for i in 0..SPECTRUM_BINS {
+            let t = i as f32 / (SPECTRUM_BINS - 1) as f32;
+            let freq = 10.0_f32.powf(log_min + t * (log_max - log_min));
+
+            // Find the FFT bin range covering this UI bin
+            let t_next = (i + 1) as f32 / (SPECTRUM_BINS - 1) as f32;
+            let freq_next = if i + 1 < SPECTRUM_BINS {
+                10.0_f32.powf(log_min + t_next * (log_max - log_min))
+            } else {
+                freq * 1.05
+            };
+
+            let bin_lo = ((freq / bin_hz) as usize).max(1).min(half - 1);
+            let bin_hi = ((freq_next / bin_hz) as usize).max(bin_lo + 1).min(half);
+
+            // Average magnitudes in the range
+            let mut sum_mag = 0.0_f32;
+            let count = (bin_hi - bin_lo).max(1);
+            for b in bin_lo..bin_hi {
+                let mag = complex_buf[b].norm();
+                sum_mag += mag;
+            }
+            let avg_mag = sum_mag / count as f32;
+
+            // Convert to dB with normalization
+            let db = if avg_mag > 1e-10 {
+                20.0 * avg_mag.log10() - 20.0 * (FFT_SIZE as f32 / 2.0).log10()
+            } else {
+                -100.0
+            };
+
+            // Smooth with previous value (exponential decay)
+            let prev = self.ui_state.spectrum_bins[i].load(Ordering::Relaxed);
+            let smoothed = if db > prev { db } else { prev * 0.85 + db * 0.15 };
+            self.ui_state.spectrum_bins[i].store(smoothed, Ordering::Relaxed);
+        }
+    }
+}
+
 impl Plugin for FtsEq {
     const NAME: &'static str = "FTS EQ";
     const VENDOR: &'static str = "FastTrackStudio";
@@ -287,6 +379,9 @@ impl Plugin for FtsEq {
         _context: &mut impl InitContext<Self>,
     ) -> bool {
         self.sample_rate = buffer_config.sample_rate as f64;
+        self.ui_state
+            .sample_rate
+            .store(buffer_config.sample_rate, Ordering::Relaxed);
         self.chain.update(AudioConfig {
             sample_rate: self.sample_rate,
             max_buffer_size: buffer_config.max_buffer_size as usize,
@@ -333,6 +428,15 @@ impl Plugin for FtsEq {
 
             *left_ref = left as f32;
             *right_ref = right as f32;
+
+            // Accumulate post-EQ mono into FFT buffer
+            let mono = (left + right) as f32 * 0.5;
+            self.fft_buffer[self.fft_pos] = mono;
+            self.fft_pos += 1;
+            if self.fft_pos >= FFT_SIZE {
+                self.run_spectrum_fft();
+                self.fft_pos = 0;
+            }
 
             // Track output peak
             let output_peak = (left.abs().max(right.abs())) as f32;
