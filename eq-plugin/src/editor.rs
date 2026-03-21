@@ -137,10 +137,7 @@ pub fn App() -> Element {
                     db_range: 30.0,
                     sample_rate: sample_rate,
                     spectrum_db: spectrum,
-
-                    on_focus_change: move |band_idx: Option<usize>| {
-                        focused_band.set(band_idx);
-                    },
+                    focused_band_out: focused_band,
 
                     on_band_change: {
                         let ctx = ctx.clone();
@@ -275,9 +272,10 @@ pub fn App() -> Element {
                 LevelMeterDb { level_db: input_db, label: "IN".to_string(), height: 40.0 }
                 LevelMeterDb { level_db: output_db, label: "OUT".to_string(), height: 40.0 }
 
-                // Band detail panel (shown when a band is focused)
-                if let Some(idx) = *focused_band.read() {
-                    {
+                // Band detail panel (always rendered, hidden when no band focused)
+                {
+                    let focus_idx = *focused_band.read();
+                    let (detail_text, detail_color, detail_opacity) = if let Some(idx) = focus_idx {
                         let bp = &params.bands[idx];
                         let freq = bp.freq_hz.value();
                         let gain = bp.gain_db.value();
@@ -289,35 +287,27 @@ pub fn App() -> Element {
                         } else {
                             format!("{:.0} Hz", freq)
                         };
+                        let text = format!(
+                            "B{}  {}  {}  {:+.1} dB  Q {:.2}",
+                            idx + 1, shape.label(), freq_str, gain, q
+                        );
                         let color = get_band_color(idx);
+                        let op = if enabled { "1.0" } else { "0.5" };
+                        (text, color.to_string(), op.to_string())
+                    } else {
+                        (String::new(), theme::TEXT_DIM.to_string(), "0".to_string())
+                    };
 
-                        rsx! {
-                            div {
-                                style: format!(
-                                    "display:flex; align-items:center; gap:10px; \
-                                     padding:2px 10px; margin-left:8px; \
-                                     border-left:2px solid {color}; \
-                                     opacity:{op};",
-                                    op = if enabled { "1.0" } else { "0.5" },
-                                ),
-                                span {
-                                    style: format!(
-                                        "font-size:11px; font-weight:600; color:{color};",
-                                    ),
-                                    "B{idx + 1}"
-                                }
-                                span {
-                                    style: format!("font-size:10px; color:{};", theme::TEXT),
-                                    "{shape.label()}"
-                                }
-                                span {
-                                    style: format!(
-                                        "font-size:10px; color:{}; font-variant-numeric:tabular-nums;",
-                                        theme::TEXT_DIM,
-                                    ),
-                                    "{freq_str}  {gain:+.1} dB  Q {q:.2}"
-                                }
-                            }
+                    rsx! {
+                        div {
+                            style: format!(
+                                "padding:2px 10px; margin-left:8px; \
+                                 border-left:2px solid {detail_color}; \
+                                 opacity:{detail_opacity}; \
+                                 font-size:10px; color:{c}; font-variant-numeric:tabular-nums;",
+                                c = theme::TEXT,
+                            ),
+                            "{detail_text}"
                         }
                     }
                 }
