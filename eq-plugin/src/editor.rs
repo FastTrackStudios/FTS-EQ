@@ -141,6 +141,10 @@ pub fn App() -> Element {
                     // Window is 1000x600; header ~33px, bottom bar ~52px
                     rendered_width: 1000.0,
                     rendered_height: 515.0,
+                    // Blitz element_coordinates() returns window coords;
+                    // subtract the element's position in the window
+                    offset_x: 0.0,
+                    offset_y: 33.0,
 
                     on_band_change: {
                         let ctx = ctx.clone();
