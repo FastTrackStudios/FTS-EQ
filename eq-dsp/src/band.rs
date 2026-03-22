@@ -187,13 +187,9 @@ impl Band {
                 FilterType::HighShelf => {
                     coeff::high_shelf_1(self.freq_hz, self.gain_db, config.sample_rate)
                 }
-                FilterType::TiltShelf => coeff::calculate(
-                    self.filter_type,
-                    self.freq_hz,
-                    self.q,
-                    effective_gain_db,
-                    config.sample_rate,
-                ),
+                FilterType::TiltShelf => {
+                    coeff::tilt_shelf_1(self.freq_hz, effective_gain_db, config.sample_rate)
+                }
                 _ => unreachable!(),
             };
             self.set_section_coeffs(0, c);
@@ -245,13 +241,9 @@ impl Band {
                 FilterType::HighShelf => {
                     coeff::high_shelf_1(self.freq_hz, gain_per_section, config.sample_rate)
                 }
-                FilterType::TiltShelf => coeff::calculate(
-                    self.filter_type,
-                    self.freq_hz,
-                    self.q,
-                    gain_per_section,
-                    config.sample_rate,
-                ),
+                FilterType::TiltShelf => {
+                    coeff::tilt_shelf_1(self.freq_hz, gain_per_section, config.sample_rate)
+                }
                 _ => unreachable!(),
             };
             self.set_section_coeffs(section_idx, c);

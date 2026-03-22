@@ -1,7 +1,7 @@
 //! Filter coefficient calculation — hybrid matched/RBJ approach.
 //!
-//! Peak, notch, allpass, and tilt shelf use Vicanek matched design (no Nyquist cramping).
-//! LP, HP, bandpass, and shelves use RBJ cookbook (bilinear transform) to match Pro-Q 4.
+//! Peak, notch, allpass, and 1st-order shelves use Vicanek matched design (no Nyquist cramping).
+//! LP, HP, bandpass, 2nd-order shelves, and tilt shelf use RBJ cookbook (bilinear transform).
 
 use std::f64::consts::PI;
 
@@ -250,40 +250,15 @@ pub fn highpass_1(freq_hz: f64, sample_rate: f64) -> Coeffs {
 }
 
 pub fn low_shelf_1(freq_hz: f64, gain_db: f64, sample_rate: f64) -> Coeffs {
+    // Vicanek matched 1-pole low shelf (no Nyquist cramping).
+    // Low shelf = high shelf with 1/G, then scale b coefficients by G.
     let g = 10.0_f64.powf(gain_db / 20.0);
     if (g - 1.0).abs() < 1e-6 {
         return PASSTHROUGH;
     }
-    let corner_hz = if g > 1.0 {
-        freq_hz / g.sqrt()
-    } else {
-        freq_hz * g.sqrt()
-    };
-    let w0 = (2.0 * PI * corner_hz / sample_rate).clamp(1e-6, PI - 1e-6);
-    let wc = (w0 / 2.0).tan();
-    if g > 1.0 {
-        let gwc = g * wc;
-        let a0_inv = 1.0 / (1.0 + wc);
-        [
-            1.0,
-            (-1.0 + wc) * a0_inv,
-            0.0,
-            (1.0 + gwc) * a0_inv,
-            (-1.0 + gwc) * a0_inv,
-            0.0,
-        ]
-    } else {
-        let wc_g = wc / g;
-        let a0_inv = 1.0 / (1.0 + wc_g);
-        [
-            1.0,
-            (-1.0 + wc_g) * a0_inv,
-            0.0,
-            (1.0 + wc) * a0_inv,
-            (-1.0 + wc) * a0_inv,
-            0.0,
-        ]
-    }
+    let c = high_shelf_1_matched(freq_hz, 1.0 / g, sample_rate);
+    // Scale numerator by gain to get low-shelf DC=G, Nyquist=1
+    [c[0], c[1], c[2], c[3] * g, c[4] * g, c[5]]
 }
 
 pub fn high_shelf_1(freq_hz: f64, gain_db: f64, sample_rate: f64) -> Coeffs {
@@ -291,35 +266,31 @@ pub fn high_shelf_1(freq_hz: f64, gain_db: f64, sample_rate: f64) -> Coeffs {
     if (g - 1.0).abs() < 1e-6 {
         return PASSTHROUGH;
     }
-    let corner_hz = if g > 1.0 {
-        freq_hz * g.sqrt()
-    } else {
-        freq_hz / g.sqrt()
-    };
-    let w0 = (2.0 * PI * corner_hz / sample_rate).clamp(1e-6, PI - 1e-6);
-    let wc = (w0 / 2.0).tan();
-    if g > 1.0 {
-        let a0_inv = 1.0 / (1.0 + wc);
-        [
-            1.0,
-            (-1.0 + wc) * a0_inv,
-            0.0,
-            (g + wc) * a0_inv,
-            (-g + wc) * a0_inv,
-            0.0,
-        ]
-    } else {
-        let g_inv = 1.0 / g;
-        let a0_inv = 1.0 / (g_inv + wc);
-        [
-            1.0,
-            (-g_inv + wc) * a0_inv,
-            0.0,
-            (1.0 + wc) * a0_inv,
-            (-1.0 + wc) * a0_inv,
-            0.0,
-        ]
-    }
+    high_shelf_1_matched(freq_hz, g, sample_rate)
+}
+
+/// Vicanek matched 1-pole high shelf filter.
+/// fc is in Hz, g is linear gain (>1 boost, <1 cut).
+fn high_shelf_1_matched(freq_hz: f64, g: f64, sample_rate: f64) -> Coeffs {
+    let fc = freq_hz / (sample_rate / 2.0); // normalize to Nyquist
+    let fc = fc.max(1e-6);
+    let fc_sq = fc * fc;
+    let fm = 0.9_f64; // matching point slightly below Nyquist
+    let phi_m = 1.0 - (PI * fm).cos();
+
+    // Use eq. 12 with matching point fm = 0.9
+    let alpha = (2.0 / (PI * PI)) * (1.0 / (fm * fm) + 1.0 / (g * fc_sq)) - 1.0 / phi_m;
+    let beta = (2.0 / (PI * PI)) * (1.0 / (fm * fm) + g / fc_sq) - 1.0 / phi_m;
+
+    // Recover a1 and b ratio from α and β (eq. 10)
+    let a1 = -alpha / (1.0 + alpha + (1.0 + 2.0 * alpha).max(0.0).sqrt());
+    let b_ratio = -beta / (1.0 + beta + (1.0 + 2.0 * beta).max(0.0).sqrt());
+
+    // High shelf normalization: DC gain = 1, so b0 + b1 = 1 + a1 (eq. 6/11)
+    let b0 = (1.0 + a1) / (1.0 + b_ratio);
+    let b1 = b_ratio * b0;
+
+    [1.0, a1, 0.0, b0, b1, 0.0]
 }
 
 pub fn allpass_1(freq_hz: f64, sample_rate: f64) -> Coeffs {
@@ -328,7 +299,20 @@ pub fn allpass_1(freq_hz: f64, sample_rate: f64) -> Coeffs {
     [1.0, -p, 0.0, -p, 1.0, 0.0]
 }
 
-// ── RBJ cookbook shelves ──────────────────────────────────────────────
+/// 1st-order tilt shelf using Vicanek matched 1-pole shelf.
+/// DC gain = 1/√g, Nyquist gain = √g (tilts around pivot at freq_hz).
+pub fn tilt_shelf_1(freq_hz: f64, gain_db: f64, sample_rate: f64) -> Coeffs {
+    let g = 10.0_f64.powf(gain_db / 20.0);
+    if (g - 1.0).abs() < 1e-6 {
+        return PASSTHROUGH;
+    }
+    // Low shelf with gain=g, then scale by 1/√g to center tilt.
+    let c = low_shelf_1(freq_hz, gain_db, sample_rate);
+    let inv_sqrt_g = 1.0 / g.sqrt();
+    [c[0], c[1], c[2], c[3] * inv_sqrt_g, c[4] * inv_sqrt_g, c[5]]
+}
+
+// ── Matched 2nd-order shelves with Q ─────────────────────────────────
 
 fn shelf_alpha(sin_w0: f64, a_amp: f64, s: f64) -> f64 {
     let s = s.max(0.01);
@@ -340,54 +324,63 @@ fn low_shelf_2(w0: f64, q: f64, g: f64) -> Coeffs {
     if (g - 1.0).abs() < 1e-6 {
         return PASSTHROUGH;
     }
-    let a_amp = g.sqrt();
-    let sin_w0 = w0.sin();
-    let cos_w0 = w0.cos();
-    let s = q * std::f64::consts::SQRT_2;
-    let alpha = shelf_alpha(sin_w0, a_amp, s);
-    let two_sqrt_a_alpha = 2.0 * a_amp.sqrt() * alpha;
-    let a0 = (a_amp + 1.0) + (a_amp - 1.0) * cos_w0 + two_sqrt_a_alpha;
-    let a1 = -2.0 * ((a_amp - 1.0) + (a_amp + 1.0) * cos_w0);
-    let a2 = (a_amp + 1.0) + (a_amp - 1.0) * cos_w0 - two_sqrt_a_alpha;
-    let b0 = a_amp * ((a_amp + 1.0) - (a_amp - 1.0) * cos_w0 + two_sqrt_a_alpha);
-    let b1 = 2.0 * a_amp * ((a_amp - 1.0) - (a_amp + 1.0) * cos_w0);
-    let b2 = a_amp * ((a_amp + 1.0) - (a_amp - 1.0) * cos_w0 - two_sqrt_a_alpha);
-    let a0_inv = 1.0 / a0;
-    [
-        1.0,
-        a1 * a0_inv,
-        a2 * a0_inv,
-        b0 * a0_inv,
-        b1 * a0_inv,
-        b2 * a0_inv,
-    ]
+    // Matched low shelf = matched high shelf with 1/G, scale numerator by G
+    let c = high_shelf_2_matched_q(w0, q, 1.0 / g);
+    [c[0], c[1], c[2], c[3] * g, c[4] * g, c[5] * g]
 }
 
 fn high_shelf_2(w0: f64, q: f64, g: f64) -> Coeffs {
     if (g - 1.0).abs() < 1e-6 {
         return PASSTHROUGH;
     }
-    let a_amp = g.sqrt();
-    let sin_w0 = w0.sin();
-    let cos_w0 = w0.cos();
-    let s = q * std::f64::consts::SQRT_2;
-    let alpha = shelf_alpha(sin_w0, a_amp, s);
-    let two_sqrt_a_alpha = 2.0 * a_amp.sqrt() * alpha;
-    let a0 = (a_amp + 1.0) - (a_amp - 1.0) * cos_w0 + two_sqrt_a_alpha;
-    let a1 = 2.0 * ((a_amp - 1.0) - (a_amp + 1.0) * cos_w0);
-    let a2 = (a_amp + 1.0) - (a_amp - 1.0) * cos_w0 - two_sqrt_a_alpha;
-    let b0 = a_amp * ((a_amp + 1.0) + (a_amp - 1.0) * cos_w0 + two_sqrt_a_alpha);
-    let b1 = -2.0 * a_amp * ((a_amp - 1.0) + (a_amp + 1.0) * cos_w0);
-    let b2 = a_amp * ((a_amp + 1.0) + (a_amp - 1.0) * cos_w0 - two_sqrt_a_alpha);
-    let a0_inv = 1.0 / a0;
-    [
-        1.0,
-        a1 * a0_inv,
-        a2 * a0_inv,
-        b0 * a0_inv,
-        b1 * a0_inv,
-        b2 * a0_inv,
-    ]
+    high_shelf_2_matched_q(w0, q, g)
+}
+
+/// Vicanek-style matched 2nd-order high shelf with arbitrary Q.
+/// Uses impulse-invariance for poles + magnitude matching at DC/Nyquist/corner.
+/// The analog prototype is: H(s) = A·[A·s²+(√A/Q)·s+1] / [s²+(√A/Q)·s+A]
+/// where A = √G.
+fn high_shelf_2_matched_q(w0: f64, q: f64, g: f64) -> Coeffs {
+    let a = g.sqrt(); // A = √G (RBJ convention)
+    let sqrt_a = a.sqrt(); // √A = G^(1/4)
+
+    // Map analog shelf denominator poles to digital via impulse invariance.
+    // Denominator: s² + (√A/Q)·ωc·s + A·ωc² = 0
+    // Standard form poles at s = ωc·(-b ± j·√(c²-b²))
+    // where b = √A/(2Q), c = √A
+    let (a1, a2) = solve_poles(w0, sqrt_a / (2.0 * q), sqrt_a);
+
+    // Squared-magnitude parameters for denominator
+    let a0_big = (1.0 + a1 + a2).powi(2);
+    let a1_big = (1.0 - a1 + a2).powi(2);
+    let a2_big = -4.0 * a2;
+    let p0 = phi0(w0);
+    let p1 = phi1(w0);
+
+    // DC: high shelf has |H(0)|² = 1
+    let b0_big = a0_big;
+
+    // Nyquist: compute from analog prototype
+    // |H(jf)|² = A²·[(1-A·f²)² + A·f²/Q²] / [(A-f²)² + A·f²/Q²]
+    let f_ny = PI / w0;
+    let f_ny_sq = f_ny * f_ny;
+    let a_f_ny_sq = a * f_ny_sq;
+    let a_over_q_sq = a * f_ny_sq / (q * q);
+    let num_ny = (1.0 - a_f_ny_sq).powi(2) + a_over_q_sq;
+    let den_ny = (a - f_ny_sq).powi(2) + a_over_q_sq;
+    let h_ny_sq = if den_ny.abs() > 1e-30 {
+        a * a * num_ny / den_ny
+    } else {
+        g // fallback to full gain
+    };
+    let b1_big = a1_big * h_ny_sq;
+
+    // Corner: |H(w0)|² = G (half-gain point in dB)
+    let target = g * (a0_big * p0 + a1_big * p1 + a2_big * 4.0 * p0 * p1);
+    let b2_big = (target - b0_big * p0 - b1_big * p1) / (4.0 * p0 * p1);
+
+    let (b0, b1, b2) = mag_sq_to_b([b0_big.max(0.0), b1_big.max(0.0), b2_big]);
+    [1.0, a1, a2, b0, b1, b2]
 }
 
 /// Zoelzer parametric low shelf with resonance support.
