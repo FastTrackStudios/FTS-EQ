@@ -95,43 +95,47 @@ pub fn App() -> Element {
         DragProvider {
         div {
             style: format!(
-                "width:100vw; height:100vh; \
-                 background:{BG}; color:{TEXT}; \
-                 font-family:system-ui,sans-serif; font-size:13px; user-select:none; \
-                 display:flex; flex-direction:column; overflow:hidden;",
-                BG = theme::BG, TEXT = theme::TEXT,
+                "{ROOT} display:flex; flex-direction:column; overflow:hidden;",
+                ROOT = theme::ROOT_STYLE,
             ),
 
             // ── Header ───────────────────────────────────────────
             div {
                 style: format!(
                     "display:flex; justify-content:space-between; align-items:center; \
-                     padding:8px 14px; border-bottom:1px solid {BORDER};",
+                     padding:{SPACING}; border-bottom:1px solid {BORDER}; \
+                     box-shadow:{SHADOW};",
+                    SPACING = theme::SPACING_ROOT,
                     BORDER = theme::BORDER,
+                    SHADOW = theme::SHADOW_SUBTLE,
                 ),
                 div {
                     style: "display:flex; align-items:baseline; gap:12px;",
                     div {
-                        style: "font-size:16px; font-weight:700; letter-spacing:0.5px;",
+                        style: format!(
+                            "font-size:{SIZE}; font-weight:700; letter-spacing:0.5px; color:{CLR};",
+                            SIZE = theme::FONT_SIZE_TITLE,
+                            CLR = theme::TEXT_BRIGHT,
+                        ),
                         "FTS EQ"
                     }
                     div {
-                        style: format!(
-                            "font-size:11px; color:{};",
-                            theme::TEXT_DIM,
-                        ),
+                        style: format!("{}", theme::STYLE_LABEL),
                         "{active_count} bands active"
                     }
                 }
                 div {
-                    style: format!("font-size:11px; color:{};", theme::TEXT_DIM),
+                    style: format!("{}", theme::STYLE_LABEL),
                     "FastTrackStudio"
                 }
             }
 
             // ── Main EQ graph ────────────────────────────────────
             div {
-                style: "flex:1; min-height:0; position:relative;",
+                style: format!(
+                    "{INSET} flex:1; min-height:0; position:relative; margin:4px 6px;",
+                    INSET = theme::STYLE_INSET,
+                ),
                 EqGraph {
                     bands: bands_signal,
                     db_range: 30.0,
@@ -271,10 +275,13 @@ pub fn App() -> Element {
             // ── Bottom bar: meters + output gain ──────────────────
             div {
                 style: format!(
-                    "display:flex; align-items:center; gap:12px; \
-                     padding:6px 14px; border-top:1px solid {BORDER}; \
-                     background:{CARD_BG};",
-                    BORDER = theme::BORDER, CARD_BG = theme::CARD_BG,
+                    "{CARD} display:flex; align-items:center; gap:{GAP}; \
+                     padding:{SPACING}; border-top:1px solid {BORDER}; \
+                     border-radius:0;",
+                    CARD = theme::STYLE_CARD,
+                    GAP = theme::SPACING_SECTION,
+                    SPACING = theme::SPACING_ROOT,
+                    BORDER = theme::BORDER,
                 ),
                 LevelMeterDb { level_db: input_db, label: "IN".to_string(), height: 40.0 }
                 LevelMeterDb { level_db: output_db, label: "OUT".to_string(), height: 40.0 }
@@ -308,11 +315,11 @@ pub fn App() -> Element {
                     rsx! {
                         div {
                             style: format!(
-                                "padding:2px 10px; margin-left:8px; \
+                                "{VALUE} padding:{TIGHT} 10px; margin-left:8px; \
                                  border-left:2px solid {detail_color}; \
-                                 opacity:{detail_opacity}; \
-                                 font-size:10px; color:{c}; font-variant-numeric:tabular-nums;",
-                                c = theme::TEXT,
+                                 opacity:{detail_opacity};",
+                                VALUE = theme::STYLE_VALUE,
+                                TIGHT = theme::SPACING_TIGHT,
                             ),
                             "{detail_text}"
                         }
@@ -325,10 +332,7 @@ pub fn App() -> Element {
                 div {
                     style: "display:flex; align-items:center; gap:8px;",
                     span {
-                        style: format!(
-                            "font-size:10px; color:{}; text-transform:uppercase;",
-                            theme::TEXT_DIM,
-                        ),
+                        style: format!("{}", theme::STYLE_LABEL),
                         "Output"
                     }
                     audio_gui::controls::knob::Knob {
