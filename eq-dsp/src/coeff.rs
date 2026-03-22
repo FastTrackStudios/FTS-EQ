@@ -88,7 +88,8 @@ fn mag_sq_to_b(big_b: [f64; 3]) -> (f64, f64, f64) {
 
 fn lowpass_2(w0: f64, q: f64) -> Coeffs {
     // Vicanek matched lowpass: impulse-invariance poles + magnitude matching.
-    // Avoids bilinear transform cramping near Nyquist.
+    // Matches magnitude at DC (1), Nyquist (analog value), and corner (Q^2).
+    // Better than BLT for passband accuracy near Nyquist.
     let (a1, a2) = solve_poles(w0, 0.5 / q, 1.0);
 
     let a0_big = (1.0 + a1 + a2).powi(2);
@@ -99,14 +100,13 @@ fn lowpass_2(w0: f64, q: f64) -> Coeffs {
 
     // DC gain = 1
     let b0_big = a0_big;
-    // Nyquist gain = analog value (not 0 — avoids cramping)
-    // Analog 2nd-order LP: |H(jw)|² = 1/((1-r²)² + r²/Q²)  where r = w/w0
-    let r = PI / w0; // Nyquist / cutoff ratio
+    // Nyquist gain = analog value (avoids cramping)
+    let r = PI / w0;
     let r2 = r * r;
     let nyq_mag_sq = 1.0 / ((1.0 - r2).powi(2) + r2 / (q * q));
     let b1_big = a1_big * nyq_mag_sq;
 
-    // Match at corner: |H(w0)|² = Q² (exact for 2nd-order LP)
+    // Match at corner: |H(w0)|^2 = Q^2
     let q_sq = q * q;
     let target_at_corner = q_sq * (a0_big * p0 + a1_big * p1 + a2_big * p0 * p1 * 4.0);
     let b2_big = (target_at_corner - b0_big * p0 - b1_big * p1) / (4.0 * p0 * p1);
@@ -116,29 +116,14 @@ fn lowpass_2(w0: f64, q: f64) -> Coeffs {
 }
 
 fn highpass_2(w0: f64, q: f64) -> Coeffs {
-    // Vicanek matched highpass: impulse-invariance poles + magnitude matching.
+    // Hybrid: Vicanek impulse-invariance poles (good passband, no cramping)
+    // + exact zeros at z=1 (deep DC stopband).
     let (a1, a2) = solve_poles(w0, 0.5 / q, 1.0);
-
-    let a0_big = (1.0 + a1 + a2).powi(2);
-    let a1_big = (1.0 - a1 + a2).powi(2);
-    let a2_big = -4.0 * a2;
-    let p0 = phi0(w0);
-    let p1 = phi1(w0);
-
-    // Nyquist gain = 1
-    let b1_big = a1_big;
-    // DC gain = analog value (not 0 — symmetric with LP approach)
-    // Analog 2nd-order HP: |H(jw)|² = r⁴/((1-r²)² + r²/Q²) where r = w/w0
-    // At DC (w→0): r→0, so |H|² → 0. Use 0 for DC.
-    let b0_big = 0.0;
-
-    // Match at corner: |H(w0)|² = Q²
-    let q_sq = q * q;
-    let target_at_corner = q_sq * (a0_big * p0 + a1_big * p1 + a2_big * p0 * p1 * 4.0);
-    let b2_big = (target_at_corner - b0_big * p0 - b1_big * p1) / (4.0 * p0 * p1);
-
-    let (b0, b1, b2) = mag_sq_to_b([b0_big.max(0.0), b1_big.max(0.0), b2_big]);
-    [1.0, a1, a2, b0, b1, b2]
+    // Numerator: proportional to (1 - z^-1)^2 = 1 - 2z^-1 + z^-2
+    // Scale for unity Nyquist gain: H(-1) = (b0-b1+b2)/(1-a1+a2) = 1
+    let nyq_den = 1.0 - a1 + a2;
+    let scale = nyq_den / 4.0; // (1-(-2)+1) = 4
+    [1.0, a1, a2, scale, -2.0 * scale, scale]
 }
 
 fn bandpass_2(w0: f64, q: f64) -> Coeffs {

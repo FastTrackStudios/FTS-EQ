@@ -499,37 +499,91 @@ impl Band {
         }
     }
 
-    /// Flat tilt: constant dB/octave slope via Julius Smith's spectral tilt.
+    /// Flat tilt: constant dB/octave slope via cascaded first-order shelves.
     ///
-    /// Cascades N first-order pole-zero pairs at geometrically spaced frequencies.
-    /// The slope parameter (alpha) maps from gain_db: alpha = gain_db / (6 * octaves).
+    /// Each section is a matched 1st-order shelf at a geometrically spaced frequency.
+    /// The gain per section is chosen so the cascade produces a linear (in log-freq)
+    /// tilt centered at the pivot frequency.
     fn update_flat_tilt(&mut self, _order: usize, config: AudioConfig) {
+        use std::f64::consts::PI;
         let sr = config.sample_rate;
 
-        // Number of first-order sections to use (more = smoother approximation)
         let n = MAX_SECTIONS;
         self.num_sections = n;
 
-        // Frequency range covering the audible spectrum
-        let f_lo = 10.0; // Hz
-        let f_hi = sr / 2.0 - 100.0; // Just below Nyquist
+        if self.gain_db.abs() < 1e-6 {
+            for i in 0..n {
+                self.set_section_coeffs(i, coeff::PASSTHROUGH);
+            }
+            return;
+        }
 
-        // Total octaves from pivot to edges of the audible range
-        let total_octaves = (20000.0_f64 / 20.0).log2(); // ~10 octaves
+        // Frequency range for the pole/zero placement
+        let f_lo = 14.0;
+        let f_hi = (sr * 0.43).min(20000.0);
 
-        // Alpha controls the slope: alpha=1 → +6 dB/octave, alpha=-1 → -6 dB/octave
-        let alpha = self.gain_db / (6.0 * total_octaves);
-
-        // Geometric spacing ratio for poles
+        // Geometric spacing ratio
         let r = (f_hi / f_lo).powf(1.0 / (n - 1) as f64);
 
-        for i in 0..n {
-            // Pole frequency
-            let fp = f_lo * r.powi(i as i32);
-            // Zero frequency: shifted by alpha
-            let fz = f_lo * r.powf(-alpha + i as f64);
+        // Desired slope calibrated to Pro-Q 4: slope ≈ gain_db / 5.0 dB/oct
+        let desired_slope = self.gain_db / 5.0;
 
-            let c = coeff::flat_tilt_section(fp, fz, self.freq_hz, sr);
+        // Helper: measure cascade gain at a frequency
+        let measure_cascade = |secs: &[coeff::Coeffs], freq: f64| -> f64 {
+            let w = 2.0 * PI * freq / sr;
+            let cw = w.cos();
+            let sw = w.sin();
+            let mut ms = 1.0;
+            for c in secs {
+                let nr = c[3] + c[4] * cw;
+                let ni = -c[4] * sw;
+                let dr = c[0] + c[1] * cw;
+                let di = -c[1] * sw;
+                let nm = nr * nr + ni * ni;
+                let dm = dr * dr + di * di;
+                if dm > 1e-30 {
+                    ms *= nm / dm;
+                }
+            }
+            10.0 * ms.log10()
+        };
+
+        // Build with trial gain, measure actual slope, rescale to match desired
+        let trial_gain = self.gain_db / n as f64;
+        let trial_sections: Vec<coeff::Coeffs> = (0..n)
+            .map(|i| coeff::high_shelf_1(f_lo * r.powi(i as i32), trial_gain, sr))
+            .collect();
+        let g_lo = measure_cascade(&trial_sections, 20.0);
+        let g_hi = measure_cascade(&trial_sections, 20000.0);
+        let trial_slope = (g_hi - g_lo) / (20000.0_f64 / 20.0).log2();
+        let scale = if trial_slope.abs() > 1e-10 {
+            desired_slope / trial_slope
+        } else {
+            1.0
+        };
+        let gain_per_section = trial_gain * scale;
+
+        // Build final sections with calibrated gain
+        let sections: Vec<coeff::Coeffs> = (0..n)
+            .map(|i| coeff::high_shelf_1(f_lo * r.powi(i as i32), gain_per_section, sr))
+            .collect();
+
+        // Normalize at pivot frequency (0 dB at pivot)
+        let pivot_gain_db = measure_cascade(&sections, self.freq_hz);
+        let norm_linear = 10.0_f64.powf(-pivot_gain_db / 20.0);
+        for (i, c) in sections.into_iter().enumerate() {
+            let c = if i == 0 {
+                [
+                    c[0],
+                    c[1],
+                    c[2],
+                    c[3] * norm_linear,
+                    c[4] * norm_linear,
+                    c[5],
+                ]
+            } else {
+                c
+            };
             self.set_section_coeffs(i, c);
         }
     }
