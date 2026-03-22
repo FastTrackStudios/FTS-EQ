@@ -6,7 +6,7 @@
 use std::sync::atomic::Ordering;
 
 use audio_gui::prelude::{theme, DragProvider, LevelMeterDb};
-use audio_gui::viz::eq_graph::{EqBand, EqBandShape, EqGraph, get_band_color};
+use audio_gui::viz::eq_graph::{get_band_color, EqBand, EqBandShape, EqGraph};
 use fts_plugin_core::prelude::*;
 
 use crate::{EqUiState, NUM_BANDS, SPECTRUM_BINS};
@@ -16,8 +16,8 @@ fn shape_to_int(shape: EqBandShape) -> i32 {
     match shape {
         EqBandShape::Bell => 0,
         EqBandShape::LowShelf => 1,
-        EqBandShape::HighShelf => 2,
-        EqBandShape::LowCut => 3,
+        EqBandShape::LowCut => 2,
+        EqBandShape::HighShelf => 3,
         EqBandShape::HighCut => 4,
         EqBandShape::Notch => 5,
         EqBandShape::BandPass => 6,
@@ -32,8 +32,8 @@ fn int_to_shape(v: i32) -> EqBandShape {
     match v {
         0 => EqBandShape::Bell,
         1 => EqBandShape::LowShelf,
-        2 => EqBandShape::HighShelf,
-        3 => EqBandShape::LowCut,
+        2 => EqBandShape::LowCut,
+        3 => EqBandShape::HighShelf,
         4 => EqBandShape::HighCut,
         5 => EqBandShape::Notch,
         6 => EqBandShape::BandPass,
@@ -138,13 +138,13 @@ pub fn App() -> Element {
                     sample_rate: sample_rate,
                     spectrum_db: spectrum,
                     focused_band_out: focused_band,
-                    // Window is 1000x600; header ~33px, bottom bar ~52px
+                    // Blitz element_coordinates() returns element-relative
+                    // coords (confirmed by debug: elem==client for the SVG).
+                    // rendered_width/height = actual pixel size of the SVG element.
                     rendered_width: 1000.0,
-                    rendered_height: 515.0,
-                    // Blitz element_coordinates() returns window coords;
-                    // subtract the element's position in the window
+                    rendered_height: 511.0,
                     offset_x: 0.0,
-                    offset_y: 33.0,
+                    offset_y: 0.0,
 
                     on_band_change: {
                         let ctx = ctx.clone();

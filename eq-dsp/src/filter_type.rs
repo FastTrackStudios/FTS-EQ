@@ -12,9 +12,14 @@ pub enum FilterType {
     Highpass,
     Bandpass,
     Notch,
+    /// Allpass: unity magnitude, phase shift at center frequency.
+    Allpass,
     /// Band shelf: peak-like shape built from opposing shelf pair.
     /// Used for higher-order peak filters (order > 2).
     BandShelf,
+    /// Flat tilt: constant dB/octave slope across the entire spectrum.
+    /// Implemented via cascaded first-order pole-zero pairs (Julius Smith method).
+    FlatTilt,
 }
 
 /// Filter structure selection.
@@ -36,12 +41,12 @@ impl FilterType {
                 | FilterType::HighShelf
                 | FilterType::TiltShelf
                 | FilterType::BandShelf
+                | FilterType::FlatTilt
         )
     }
 
     /// Whether this filter type uses a Q parameter.
     pub fn has_q(self) -> bool {
-        // All types use Q except notch (fixed by design)
-        !matches!(self, FilterType::Notch)
+        true
     }
 }

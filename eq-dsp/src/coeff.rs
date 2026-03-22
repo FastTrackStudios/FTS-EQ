@@ -50,8 +50,9 @@ pub fn calculate(
         FilterType::Highpass => highpass_2(w0, q),
         FilterType::Bandpass => bandpass_2(w0, q),
         FilterType::Notch => notch_2(w0, q),
-        FilterType::BandShelf => {
-            // Band shelf is handled at the band level by cascading shelves
+        FilterType::Allpass => allpass_2(w0, q),
+        FilterType::BandShelf | FilterType::FlatTilt => {
+            // These are handled at the band level
             PASSTHROUGH
         }
     }
@@ -105,44 +106,58 @@ fn mag_sq_to_b(big_b: [f64; 3]) -> (f64, f64, f64) {
     (b0, b1, b2)
 }
 
-/// 2nd-order matched lowpass.
+/// 2nd-order lowpass (RBJ cookbook / bilinear transform).
+///
+/// Uses the standard bilinear transform which frequency-cramps near Nyquist,
+/// matching Pro-Q 4's LP behavior.
 fn lowpass_2(w0: f64, q: f64) -> Coeffs {
-    let (a1, a2) = solve_poles(w0, 0.5 / q, 1.0);
+    let sin_w0 = w0.sin();
+    let cos_w0 = w0.cos();
+    let alpha = sin_w0 / (2.0 * q);
 
-    // Magnitude-squared denominator coefficients
-    let a0_big = (1.0 + a1 + a2) * (1.0 + a1 + a2);
-    let a1_big = (1.0 - a1 + a2) * (1.0 - a1 + a2);
-    let a2_big = -4.0 * a2;
+    let b1 = 1.0 - cos_w0;
+    let b0 = b1 / 2.0;
+    let b2 = b0;
+    let a0 = 1.0 + alpha;
+    let a1 = -2.0 * cos_w0;
+    let a2 = 1.0 - alpha;
 
-    // Match at DC (unity) and at w0 (gain = Q)
-    let p0 = phi0(w0);
-    let p1 = phi1(w0);
-    let r1 = (a0_big * p0 + a1_big * p1 + a2_big * p0 * p1 * 4.0) * q * q;
-
-    let b0_big = a0_big; // Unity at DC
-    let b1_big = (r1 - b0_big * p0) / p1;
-    let (b0, b1, _) = mag_sq_to_b([b0_big, b1_big.max(0.0), 0.0]);
-
-    [1.0, a1, a2, b0, b1, 0.0]
+    let a0_inv = 1.0 / a0;
+    [
+        1.0,
+        a1 * a0_inv,
+        a2 * a0_inv,
+        b0 * a0_inv,
+        b1 * a0_inv,
+        b2 * a0_inv,
+    ]
 }
 
-/// 2nd-order matched highpass.
+/// 2nd-order highpass (RBJ cookbook / bilinear transform).
+///
+/// Uses the standard bilinear transform which frequency-cramps near Nyquist,
+/// matching Pro-Q 4's HP behavior.
 fn highpass_2(w0: f64, q: f64) -> Coeffs {
-    let (a1, a2) = solve_poles(w0, 0.5 / q, 1.0);
+    let sin_w0 = w0.sin();
+    let cos_w0 = w0.cos();
+    let alpha = sin_w0 / (2.0 * q);
 
-    let a0_big = (1.0 + a1 + a2) * (1.0 + a1 + a2);
-    let a1_big = (1.0 - a1 + a2) * (1.0 - a1 + a2);
-    let a2_big = -4.0 * a2;
-
-    // Double zero at DC, match at w0 (gain = Q)
-    let p0 = phi0(w0);
-    let p1 = phi1(w0);
-    let r1 = a0_big * p0 + a1_big * p1 + a2_big * p0 * p1 * 4.0;
-    let b0 = q * r1.sqrt() / (4.0 * p1);
-    let b1 = -2.0 * b0;
+    let b1 = -(1.0 + cos_w0);
+    let b0 = -b1 / 2.0;
     let b2 = b0;
+    let a0 = 1.0 + alpha;
+    let a1 = -2.0 * cos_w0;
+    let a2 = 1.0 - alpha;
 
-    [1.0, a1, a2, b0, b1, b2]
+    let a0_inv = 1.0 / a0;
+    [
+        1.0,
+        a1 * a0_inv,
+        a2 * a0_inv,
+        b0 * a0_inv,
+        b1 * a0_inv,
+        b2 * a0_inv,
+    ]
 }
 
 /// 2nd-order matched bandpass.
@@ -266,28 +281,261 @@ fn tilt_shelf_2(w0: f64, q: f64, g: f64) -> Coeffs {
     }
 }
 
-/// 2nd-order matched low shelf = tilt shelf with gain, then scale numerator.
+/// 2nd-order allpass filter.
 ///
-/// DC gain = sqrt(g) * sqrt(g) = g. Nyquist gain = (1/sqrt(g)) * sqrt(g) = 1.
-fn low_shelf_2(w0: f64, q: f64, g: f64) -> Coeffs {
-    let mut c = tilt_shelf_2(w0, q, g);
-    let scale = g.sqrt();
-    c[3] *= scale;
-    c[4] *= scale;
-    c[5] *= scale;
-    c
+/// Unity magnitude at all frequencies, phase shift around w0.
+/// Uses the same pole placement as the bandpass, with zeros mirrored.
+fn allpass_2(w0: f64, q: f64) -> Coeffs {
+    let (a1, a2) = solve_poles(w0, 0.5 / q, 1.0);
+
+    // Allpass: numerator = reversed denominator
+    // H(z) = (a2 + a1*z^-1 + z^-2) / (1 + a1*z^-1 + a2*z^-2)
+    [1.0, a1, a2, a2, a1, 1.0]
 }
 
-/// 2nd-order matched high shelf = tilt shelf with inverted gain, then scale numerator.
+/// 1st-order lowpass filter coefficients (bilinear transform).
 ///
-/// DC gain = sqrt(1/g) * sqrt(g) = 1. Nyquist gain = sqrt(g) * sqrt(g) = g.
+/// True 1st-order (6 dB/oct) with frequency cramping matching Pro-Q 4.
+pub fn lowpass_1(freq_hz: f64, sample_rate: f64) -> Coeffs {
+    let w0 = (2.0 * PI * freq_hz / sample_rate).clamp(1e-6, PI - 1e-6);
+    let wc = (w0 / 2.0).tan();
+    let a0_inv = 1.0 / (1.0 + wc);
+    let b0 = wc * a0_inv;
+    let b1 = b0;
+    let a1 = (wc - 1.0) * a0_inv;
+    [1.0, a1, 0.0, b0, b1, 0.0]
+}
+
+/// 1st-order highpass filter coefficients (bilinear transform).
+///
+/// True 1st-order (6 dB/oct) with frequency cramping matching Pro-Q 4.
+pub fn highpass_1(freq_hz: f64, sample_rate: f64) -> Coeffs {
+    let w0 = (2.0 * PI * freq_hz / sample_rate).clamp(1e-6, PI - 1e-6);
+    let wc = (w0 / 2.0).tan();
+    let a0_inv = 1.0 / (1.0 + wc);
+    let b0 = a0_inv;
+    let b1 = -b0;
+    let a1 = (wc - 1.0) * a0_inv;
+    [1.0, a1, 0.0, b0, b1, 0.0]
+}
+
+/// 1st-order low shelf filter coefficients.
+///
+/// Pro-Q 4 convention: freq_hz is the half-gain-in-dB point (where gain = sqrt(G)).
+/// For a 1st-order analog shelf, the half-gain point is at sqrt(G) * corner_freq,
+/// so we shift the corner: corner = freq / sqrt(G).
+pub fn low_shelf_1(freq_hz: f64, gain_db: f64, sample_rate: f64) -> Coeffs {
+    let g = 10.0_f64.powf(gain_db / 20.0);
+
+    if (g - 1.0).abs() < 1e-6 {
+        return PASSTHROUGH;
+    }
+
+    // Shift corner frequency so that freq_hz is the half-gain-in-dB point.
+    // Boost (g > 1): half-gain at sqrt(g)*corner → corner = freq/sqrt(g) (shift down)
+    // Cut (g < 1): half-gain at corner/sqrt(g) → corner = freq*sqrt(g) (shift down)
+    let corner_hz = if g > 1.0 {
+        freq_hz / g.sqrt()
+    } else {
+        freq_hz * g.sqrt()
+    };
+    let w0 = (2.0 * PI * corner_hz / sample_rate).clamp(1e-6, PI - 1e-6);
+
+    // Bilinear transform 1st-order shelf (prewarp with w0/2)
+    let wc = (w0 / 2.0).tan();
+    if g > 1.0 {
+        // Boost
+        let gwc = g * wc;
+        let a0_inv = 1.0 / (1.0 + wc);
+        let b0 = (1.0 + gwc) * a0_inv;
+        let b1 = (-1.0 + gwc) * a0_inv;
+        let a1 = (-1.0 + wc) * a0_inv;
+        [1.0, a1, 0.0, b0, b1, 0.0]
+    } else {
+        // Cut
+        let wc_g = wc / g;
+        let a0_inv = 1.0 / (1.0 + wc_g);
+        let b0 = (1.0 + wc) * a0_inv;
+        let b1 = (-1.0 + wc) * a0_inv;
+        let a1 = (-1.0 + wc_g) * a0_inv;
+        [1.0, a1, 0.0, b0, b1, 0.0]
+    }
+}
+
+/// 1st-order high shelf filter coefficients.
+///
+/// Pro-Q 4 convention: freq_hz is the half-gain-in-dB point.
+/// Analog prototype: H(s) = (g*s + wc) / (s + wc)
+/// DC gain = 1, Nyquist gain = g.
+pub fn high_shelf_1(freq_hz: f64, gain_db: f64, sample_rate: f64) -> Coeffs {
+    let g = 10.0_f64.powf(gain_db / 20.0);
+
+    if (g - 1.0).abs() < 1e-6 {
+        return PASSTHROUGH;
+    }
+
+    // Shift corner frequency so that freq_hz is the half-gain-in-dB point.
+    // Half-gain at corner/sqrt(g), so corner = freq * sqrt(g) for boost,
+    // corner = freq / sqrt(g) for cut. Both shift the corner AWAY from freq.
+    let corner_hz = if g > 1.0 {
+        freq_hz * g.sqrt()
+    } else {
+        freq_hz / g.sqrt()
+    };
+    let w0 = (2.0 * PI * corner_hz / sample_rate).clamp(1e-6, PI - 1e-6);
+
+    // Bilinear transform 1st-order high shelf (prewarp with w0/2)
+    let wc = (w0 / 2.0).tan();
+    if g > 1.0 {
+        // Boost: H(s) = (g*s + wc) / (s + wc)
+        let a0_inv = 1.0 / (1.0 + wc);
+        let b0 = (g + wc) * a0_inv;
+        let b1 = (-g + wc) * a0_inv;
+        let a1 = (-1.0 + wc) * a0_inv;
+        [1.0, a1, 0.0, b0, b1, 0.0]
+    } else {
+        // Cut: H(s) = (s + wc) / ((1/g)*s + wc)
+        let g_inv = 1.0 / g;
+        let a0_inv = 1.0 / (g_inv + wc);
+        let b0 = (1.0 + wc) * a0_inv;
+        let b1 = (-1.0 + wc) * a0_inv;
+        let a1 = (-g_inv + wc) * a0_inv;
+        [1.0, a1, 0.0, b0, b1, 0.0]
+    }
+}
+
+/// 1st-order allpass filter coefficients.
+pub fn allpass_1(freq_hz: f64, sample_rate: f64) -> Coeffs {
+    let w0 = (2.0 * PI * freq_hz / sample_rate).clamp(1e-6, PI - 1e-6);
+    let p = (-w0).exp();
+    // Allpass: H(z) = (-p + z^-1) / (1 - p*z^-1)
+    [1.0, -p, 0.0, -p, 1.0, 0.0]
+}
+
+/// Compute alpha for shelving filters using the RBJ S (shelf slope) parameter.
+///
+/// `alpha = sin(w0)/2 * sqrt((A + 1/A) * (1/S - 1) + 2)`
+///
+/// When S = 1: Butterworth (maximally flat transition).
+/// S < 1: gentler slope. S > 1: steeper, possibly resonant.
+fn shelf_alpha(sin_w0: f64, a_amp: f64, s: f64) -> f64 {
+    let s = s.max(0.01); // avoid division by zero
+    let val = (a_amp + 1.0 / a_amp) * (1.0 / s - 1.0) + 2.0;
+    sin_w0 / 2.0 * val.max(0.001).sqrt()
+}
+
+/// 2nd-order low shelf (RBJ cookbook / bilinear transform).
+///
+/// Uses the RBJ Audio EQ Cookbook shelf formulas with the S (shelf slope)
+/// parameter. Pro-Q 4 convention: Q_internal = Q_display / sqrt(2),
+/// and S = Q_display = Q_internal * sqrt(2).
+/// When S=1 (Q_display=1): Butterworth slope.
+fn low_shelf_2(w0: f64, q: f64, g: f64) -> Coeffs {
+    if (g - 1.0).abs() < 1e-6 {
+        return PASSTHROUGH;
+    }
+
+    let a_amp = g.sqrt(); // A = sqrt(g) = 10^(dBgain/40)
+    let sin_w0 = w0.sin();
+    let cos_w0 = w0.cos();
+    // Convert internal Q to shelf slope S: S = Q * sqrt(2) = Q_display
+    let s = q * std::f64::consts::SQRT_2;
+    let alpha = shelf_alpha(sin_w0, a_amp, s);
+    let two_sqrt_a_alpha = 2.0 * a_amp.sqrt() * alpha;
+
+    let a0 = (a_amp + 1.0) + (a_amp - 1.0) * cos_w0 + two_sqrt_a_alpha;
+    let a1 = -2.0 * ((a_amp - 1.0) + (a_amp + 1.0) * cos_w0);
+    let a2 = (a_amp + 1.0) + (a_amp - 1.0) * cos_w0 - two_sqrt_a_alpha;
+    let b0 = a_amp * ((a_amp + 1.0) - (a_amp - 1.0) * cos_w0 + two_sqrt_a_alpha);
+    let b1 = 2.0 * a_amp * ((a_amp - 1.0) - (a_amp + 1.0) * cos_w0);
+    let b2 = a_amp * ((a_amp + 1.0) - (a_amp - 1.0) * cos_w0 - two_sqrt_a_alpha);
+
+    let a0_inv = 1.0 / a0;
+    [
+        1.0,
+        a1 * a0_inv,
+        a2 * a0_inv,
+        b0 * a0_inv,
+        b1 * a0_inv,
+        b2 * a0_inv,
+    ]
+}
+
+/// 2nd-order high shelf (RBJ cookbook / bilinear transform).
+///
+/// Uses the RBJ Audio EQ Cookbook shelf formulas with the S (shelf slope)
+/// parameter, same convention as low_shelf_2.
 fn high_shelf_2(w0: f64, q: f64, g: f64) -> Coeffs {
-    let mut c = tilt_shelf_2(w0, q, 1.0 / g);
-    let scale = g.sqrt();
-    c[3] *= scale;
-    c[4] *= scale;
-    c[5] *= scale;
-    c
+    if (g - 1.0).abs() < 1e-6 {
+        return PASSTHROUGH;
+    }
+
+    let a_amp = g.sqrt(); // A = sqrt(g) = 10^(dBgain/40)
+    let sin_w0 = w0.sin();
+    let cos_w0 = w0.cos();
+    let s = q * std::f64::consts::SQRT_2;
+    let alpha = shelf_alpha(sin_w0, a_amp, s);
+    let two_sqrt_a_alpha = 2.0 * a_amp.sqrt() * alpha;
+
+    let a0 = (a_amp + 1.0) - (a_amp - 1.0) * cos_w0 + two_sqrt_a_alpha;
+    let a1 = 2.0 * ((a_amp - 1.0) - (a_amp + 1.0) * cos_w0);
+    let a2 = (a_amp + 1.0) - (a_amp - 1.0) * cos_w0 - two_sqrt_a_alpha;
+    let b0 = a_amp * ((a_amp + 1.0) + (a_amp - 1.0) * cos_w0 + two_sqrt_a_alpha);
+    let b1 = -2.0 * a_amp * ((a_amp - 1.0) + (a_amp + 1.0) * cos_w0);
+    let b2 = a_amp * ((a_amp + 1.0) + (a_amp - 1.0) * cos_w0 - two_sqrt_a_alpha);
+
+    let a0_inv = 1.0 / a0;
+    [
+        1.0,
+        a1 * a0_inv,
+        a2 * a0_inv,
+        b0 * a0_inv,
+        b1 * a0_inv,
+        b2 * a0_inv,
+    ]
+}
+
+/// First-order section for Julius Smith's spectral tilt filter.
+///
+/// Each section is a first-order pole-zero pair, digitized via bilinear transform
+/// with prewarping to the pivot frequency.
+///
+/// `pole_hz` and `zero_hz`: analog pole/zero frequencies.
+/// `pivot_hz`: the frequency around which the tilt pivots (0 dB crossing).
+/// `sample_rate`: sample rate in Hz.
+pub fn flat_tilt_section(pole_hz: f64, zero_hz: f64, pivot_hz: f64, sample_rate: f64) -> Coeffs {
+    // Use bilinear transform with prewarping to the pivot frequency
+    let t = 1.0 / sample_rate;
+    let wp = 2.0 * PI * pivot_hz;
+    let wp_prewarp = (wp * t / 2.0).tan();
+
+    // Prewarp pole and zero frequencies
+    let pole_analog = 2.0 * PI * pole_hz;
+    let zero_analog = 2.0 * PI * zero_hz;
+
+    let prewarp = |w: f64| -> f64 {
+        if wp_prewarp.abs() < 1e-30 || (wp * t / 2.0).tan().abs() < 1e-30 {
+            return w;
+        }
+        wp_prewarp * (w * t / 2.0).tan() / (wp * t / 2.0).tan()
+    };
+
+    let p = prewarp(pole_analog);
+    let z = prewarp(zero_analog);
+
+    // Bilinear transform: s -> 2/T * (1 - z^-1)/(1 + z^-1)
+    // H(s) = (s + z) / (s + p) → H(z) with bilinear
+    let c = 2.0 / t;
+
+    let a0 = c + p;
+    let a1 = -c + p;
+    let b0 = c + z;
+    let b1 = -c + z;
+
+    // Normalize by a0
+    let a0_inv = 1.0 / a0;
+
+    [1.0, a1 * a0_inv, 0.0, b0 * a0_inv, b1 * a0_inv, 0.0]
 }
 
 #[cfg(test)]

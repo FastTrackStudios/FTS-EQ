@@ -71,6 +71,15 @@ pub struct BandParams {
 
     #[id = "q"]
     pub q: FloatParam,
+
+    /// Filter slope: 0=6dB/oct, 1=12, 2=18, 3=24, 4=30, 5=36, 6=42, 7=48, 8=72, 9=96, 10=Brickwall.
+    /// Maps to Pro-Q 4 slope values.
+    #[id = "slope"]
+    pub slope: IntParam,
+
+    /// Solo this band (mutes all other bands when active).
+    #[id = "solo"]
+    pub solo: FloatParam,
 }
 
 impl BandParams {
@@ -104,8 +113,8 @@ impl BandParams {
             .with_value_to_string(Arc::new(|v| match v {
                 0 => "Bell".to_string(),
                 1 => "Low Shelf".to_string(),
-                2 => "High Shelf".to_string(),
-                3 => "Low Cut".to_string(),
+                2 => "Low Cut".to_string(),
+                3 => "High Shelf".to_string(),
                 4 => "High Cut".to_string(),
                 5 => "Notch".to_string(),
                 6 => "Bandpass".to_string(),
@@ -154,6 +163,46 @@ impl BandParams {
                 },
             )
             .with_value_to_string(formatters::v2s_f32_rounded(2)),
+
+            slope: IntParam::new(
+                &format!("B{} Slope", idx + 1),
+                2, // 18 dB/oct default (matches Pro-Q 4 default of index 2)
+                IntRange::Linear { min: 0, max: 10 },
+            )
+            .with_value_to_string(Arc::new(|v| match v {
+                0 => "6 dB/oct".to_string(),
+                1 => "12 dB/oct".to_string(),
+                2 => "18 dB/oct".to_string(),
+                3 => "24 dB/oct".to_string(),
+                4 => "30 dB/oct".to_string(),
+                5 => "36 dB/oct".to_string(),
+                6 => "48 dB/oct".to_string(),
+                7 => "60 dB/oct".to_string(),
+                8 => "72 dB/oct".to_string(),
+                9 => "96 dB/oct".to_string(),
+                10 => "Brickwall".to_string(),
+                _ => format!("{}", v),
+            })),
+
+            solo: FloatParam::new(
+                &format!("B{} Solo", idx + 1),
+                0.0,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            )
+            .with_value_to_string(Arc::new(|v| {
+                if v > 0.5 {
+                    "On".to_string()
+                } else {
+                    "Off".to_string()
+                }
+            }))
+            .with_string_to_value(Arc::new(|s| {
+                match s.trim().to_lowercase().as_str() {
+                    "on" | "1" | "true" => Some(1.0),
+                    "off" | "0" | "false" => Some(0.0),
+                    _ => s.parse().ok(),
+                }
+            })),
         }
     }
 }
@@ -231,19 +280,61 @@ impl Default for FtsEq {
     }
 }
 
+/// Map slope index (0–10) to filter order for eq-dsp.
+/// Pro-Q 4 slopes: 6,12,18,24,30,36,48,60,72,96 dB/oct + Brickwall.
+/// Each 6 dB/oct = 1 pole (order 1).
+fn slope_to_order(slope: i32) -> usize {
+    match slope {
+        0 => 1,   // 6 dB/oct
+        1 => 2,   // 12 dB/oct
+        2 => 3,   // 18 dB/oct
+        3 => 4,   // 24 dB/oct
+        4 => 5,   // 30 dB/oct
+        5 => 6,   // 36 dB/oct
+        6 => 8,   // 48 dB/oct (Pro-Q 4 skips 42)
+        7 => 10,  // 60 dB/oct
+        8 => 12,  // 72 dB/oct
+        9 => 16,  // 96 dB/oct (clamped to MAX_ORDER in DSP)
+        10 => 16, // Brickwall (max we can do)
+        _ => 2,
+    }
+}
+
+/// LP/HP slope mapping — different from other filter types in Pro-Q 4.
+///
+/// For LP/HP, slope 0 = bypass, slope N = order N (for N=1..6),
+/// then jumps to 48/72/96/brickwall at higher indices.
+/// Verified against Pro-Q 4 reference data at slopes 0, 2, 5, 8.
+fn lp_hp_slope_to_order(slope: i32) -> usize {
+    match slope {
+        0 => 0,   // bypass
+        1 => 1,   // 6 dB/oct
+        2 => 2,   // 12 dB/oct
+        3 => 3,   // 18 dB/oct
+        4 => 4,   // 24 dB/oct
+        5 => 5,   // 30 dB/oct
+        6 => 6,   // 36 dB/oct
+        7 => 8,   // 48 dB/oct
+        8 => 12,  // 72 dB/oct
+        9 => 16,  // 96 dB/oct
+        10 => 16, // Brickwall
+        _ => 2,
+    }
+}
+
 /// Map EqBandShape integer to eq-dsp FilterType.
 fn shape_to_filter_type(shape: i32) -> FilterType {
     match shape {
         0 => FilterType::Peak,      // Bell
         1 => FilterType::LowShelf,  // Low Shelf
-        2 => FilterType::HighShelf, // High Shelf
-        3 => FilterType::Highpass,  // Low Cut (cuts lows = highpass)
+        2 => FilterType::Highpass,  // Low Cut (cuts lows = highpass)
+        3 => FilterType::HighShelf, // High Shelf
         4 => FilterType::Lowpass,   // High Cut (cuts highs = lowpass)
         5 => FilterType::Notch,     // Notch
         6 => FilterType::Bandpass,  // Bandpass
         7 => FilterType::TiltShelf, // Tilt Shelf
-        8 => FilterType::TiltShelf, // Flat Tilt (use tilt shelf)
-        9 => FilterType::Peak,      // All Pass (placeholder)
+        8 => FilterType::FlatTilt,  // Flat Tilt
+        9 => FilterType::Allpass,   // All Pass
         _ => FilterType::Peak,
     }
 }
@@ -251,26 +342,45 @@ fn shape_to_filter_type(shape: i32) -> FilterType {
 impl FtsEq {
     /// Sync nih-plug params → eq-dsp bands.
     fn sync_params(&mut self) {
+        // Check if any band has solo active
+        let any_solo = (0..NUM_BANDS).any(|i| self.params.bands[i].solo.value() > 0.5);
+
         for i in 0..NUM_BANDS {
             let bp = &self.params.bands[i];
             if let Some(band) = self.chain.band_mut(i) {
-                let enabled = bp.enabled.value() > 0.5;
+                let band_enabled = bp.enabled.value() > 0.5;
+                let is_solo = bp.solo.value() > 0.5;
+                // If any band is soloed, only soloed bands are active
+                let enabled = if any_solo {
+                    band_enabled && is_solo
+                } else {
+                    band_enabled
+                };
                 let ft = shape_to_filter_type(bp.filter_type.value());
                 let freq = bp.freq_hz.value() as f64;
                 let gain = bp.gain_db.value() as f64;
-                let q = bp.q.value() as f64;
+                // Pro-Q 4 convention: display Q=1.0 = Butterworth (filter Q = 1/√2).
+                let q = bp.q.value() as f64 * std::f64::consts::FRAC_1_SQRT_2;
+                let order = match ft {
+                    FilterType::Lowpass | FilterType::Highpass => {
+                        lp_hp_slope_to_order(bp.slope.value())
+                    }
+                    _ => slope_to_order(bp.slope.value()),
+                };
 
                 if band.enabled != enabled
                     || band.filter_type != ft
                     || (band.freq_hz - freq).abs() > 0.01
                     || (band.gain_db - gain).abs() > 0.01
                     || (band.q - q).abs() > 0.001
+                    || band.order != order
                 {
                     band.enabled = enabled;
                     band.filter_type = ft;
                     band.freq_hz = freq;
                     band.gain_db = gain;
                     band.q = q;
+                    band.order = order;
                     band.structure = FilterStructure::Tdf2;
                     self.chain.update_band(i);
                 }
@@ -338,7 +448,11 @@ impl FtsEq {
 
             // Smooth with previous value (exponential decay)
             let prev = self.ui_state.spectrum_bins[i].load(Ordering::Relaxed);
-            let smoothed = if db > prev { db } else { prev * 0.85 + db * 0.15 };
+            let smoothed = if db > prev {
+                db
+            } else {
+                prev * 0.85 + db * 0.15
+            };
             self.ui_state.spectrum_bins[i].store(smoothed, Ordering::Relaxed);
         }
     }
