@@ -3,7 +3,7 @@
 //! Cascades multiple 2nd-order sections with Butterworth-distributed Q
 //! values for higher-order slopes. Supports all 9 filter types.
 
-use std::f64::consts::PI;
+use std::f64::consts::{PI, SQRT_2};
 
 use fts_dsp::AudioConfig;
 
@@ -144,17 +144,18 @@ impl Band {
             section_idx += 1;
         }
 
-        // Butterworth Q cascade with user Q on the last section (resonance control).
-        // Pro-Q 4 applies user Q to one biquad section for resonance at cutoff,
-        // while other sections maintain Butterworth Q for proper rolloff shape.
+        // Butterworth Q cascade with user-scaled Q on the last section (resonance).
+        // At display Q=1.0 (self.q = 1/√2), the filter should be true Butterworth.
+        // Scale the last biquad's Butterworth Q by the user's display Q factor.
         let num_biquads = num_2nd.min(self.num_sections - section_idx);
         for i in 0..num_biquads {
+            let bw_q = butterworth_q_for_order(order, i);
             let q_section = if i == num_biquads - 1 {
-                // Last biquad: use user Q for resonance control
-                self.q
+                // Last biquad: scale Butterworth Q by user's display Q
+                // self.q = display_q * FRAC_1_SQRT_2, so display_q = self.q / FRAC_1_SQRT_2
+                bw_q * self.q * SQRT_2
             } else {
-                // Other biquads: Butterworth Q for clean rolloff
-                butterworth_q(num_2nd, i)
+                bw_q
             };
             let c = coeff::calculate(
                 self.filter_type,
@@ -272,7 +273,19 @@ impl Band {
                 };
                 self.set_section_coeffs(section_idx, c);
             } else {
-                let q_section = butterworth_q(num_2nd, i);
+                // Last biquad: scale Butterworth Q by display Q for transition width.
+                // Inner biquads: always Butterworth Q for proper cascade shape.
+                let bw_q = butterworth_q(num_2nd, i);
+                let q_section = if is_last {
+                    // Blend Q scaling based on order: full at order ≤ 6,
+                    // tapering off for higher orders where large scaling
+                    // destabilizes the cascade.
+                    let blend = (1.0 - (order as f64 - 6.0) / 12.0).clamp(0.5, 1.0);
+                    let scale = 1.0 + (q_user - 1.0) * blend;
+                    bw_q * scale
+                } else {
+                    bw_q
+                };
                 let c = coeff::calculate(
                     self.filter_type,
                     self.freq_hz,
@@ -415,11 +428,16 @@ impl Band {
         let num = (order / 2).max(1);
         self.num_sections = num.min(MAX_SECTIONS);
 
+        // Increase Q per section to compensate for cascade bandwidth expansion.
+        // Cascading N identical notch sections widens the -3dB bandwidth;
+        // scaling Q by √N approximately preserves the apparent bandwidth.
+        let q_compensated = self.q * (self.num_sections as f64).sqrt();
+
         for i in 0..self.num_sections {
             let c = coeff::calculate(
                 FilterType::Notch,
                 self.freq_hz,
-                self.q,
+                q_compensated,
                 0.0,
                 config.sample_rate,
             );
@@ -642,4 +660,15 @@ impl Default for Band {
 fn butterworth_q(n: usize, i: usize) -> f64 {
     let angle = PI * (2 * i + 1) as f64 / (4 * n) as f64;
     0.5 / angle.cos()
+}
+
+/// Butterworth Q for the i-th biquad section based on total filter order.
+///
+/// For odd-order filters with a 1st-order + biquad cascade, the Q values
+/// must account for all poles (including the real pole). The correct formula
+/// uses the total order, not the number of biquad sections:
+///   Q_i = 1 / (2 * sin(π * (2i + 1) / (2 * order)))
+fn butterworth_q_for_order(order: usize, i: usize) -> f64 {
+    let angle = PI * (2 * i + 1) as f64 / (2 * order) as f64;
+    0.5 / angle.sin()
 }

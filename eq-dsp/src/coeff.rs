@@ -127,24 +127,58 @@ fn highpass_2(w0: f64, q: f64) -> Coeffs {
 }
 
 fn bandpass_2(w0: f64, q: f64) -> Coeffs {
-    let sin_w0 = w0.sin();
-    let cos_w0 = w0.cos();
-    let alpha = sin_w0 / (2.0 * q);
-    let b0 = alpha;
-    let b1 = 0.0;
-    let b2 = -alpha;
-    let a0 = 1.0 + alpha;
-    let a1 = -2.0 * cos_w0;
-    let a2 = 1.0 - alpha;
-    let a0_inv = 1.0 / a0;
-    [
-        1.0,
-        a1 * a0_inv,
-        a2 * a0_inv,
-        b0 * a0_inv,
-        b1 * a0_inv,
-        b2 * a0_inv,
-    ]
+    // Vicanek matched bandpass: impulse-invariance poles + 3-point magnitude matching.
+    // Matches: DC=0 (exact zero), Nyquist=analog value, center=unity peak.
+    let (a1, a2) = solve_poles(w0, 0.5 / q, 1.0);
+
+    // Analog bandpass magnitude squared at Nyquist (frequency ratio = π/w0).
+    let r = PI / w0;
+    let r2 = r * r;
+    let nyq_mag_sq = r2 / (q * q) / ((r2 - 1.0).powi(2) + r2 / (q * q));
+
+    // Denominator magnitude squared at Nyquist
+    let den_nyq_sq = (1.0 - a1 + a2).powi(2);
+
+    let cw = w0.cos();
+    let sw = w0.sin();
+    let c2w = (2.0 * cw * cw) - 1.0;
+    let s2w = 2.0 * sw * cw;
+    let den_re = 1.0 + a1 * cw + a2 * c2w;
+    let den_im = -a1 * sw - a2 * s2w;
+    let den_w0_sq = den_re * den_re + den_im * den_im;
+
+    // Constraint 1: b0+b1+b2 = 0 (DC zero), so b1 = -(b0+b2)
+    // Constraint 2: |H(π)|² = nyq_mag_sq → (2*(b0+b2))² / den_nyq_sq = nyq_mag_sq
+    let s_val = nyq_mag_sq.sqrt() * den_nyq_sq.sqrt() / 2.0; // b0+b2
+
+    // Constraint 3: |H(w0)|² = 1 → |N(w0)|² = den_w0_sq
+    // With b1 = -(b0+b2) = -S, b2 = S - b0:
+    //   N_re = b0*(1-c2w) + S*(c2w-cw)
+    //   N_im = b0*s2w + S*(sw-s2w)
+    // |N|² = P*b0² + 2*S*R*b0 + S²*T = den_w0_sq
+    let aa = 1.0 - c2w; // coefficient of b0 in N_re
+    let bb = c2w - cw; // coefficient of S in N_re
+    let cc = s2w; // coefficient of b0 in N_im
+    let dd = sw - s2w; // coefficient of S in N_im
+
+    let p_coeff = aa * aa + cc * cc; // 4*sin²(w0)
+    let r_coeff = aa * bb + cc * dd;
+    let t_coeff = bb * bb + dd * dd;
+
+    // Quadratic: P*b0² + 2*S*R*b0 + (S²*T - den_w0_sq) = 0
+    let qa = p_coeff;
+    let qb = 2.0 * s_val * r_coeff;
+    let qc = s_val * s_val * t_coeff - den_w0_sq;
+
+    let disc = (qb * qb - 4.0 * qa * qc).max(0.0);
+    // Pick the root that gives positive b0
+    let b0_a = (-qb + disc.sqrt()) / (2.0 * qa);
+    let b0_b = (-qb - disc.sqrt()) / (2.0 * qa);
+    let b0 = if b0_a > 0.0 { b0_a } else { b0_b };
+    let b2 = s_val - b0;
+    let b1 = -s_val; // -(b0+b2)
+
+    [1.0, a1, a2, b0, b1, b2]
 }
 
 // ── Vicanek matched filters ─────────────────────────────────────────
@@ -186,25 +220,11 @@ fn tilt_shelf_2(w0: f64, q: f64, g: f64) -> Coeffs {
         return PASSTHROUGH;
     }
     // Tilt shelf: DC gain = √g, Nyquist gain = 1/√g.
-    // Implemented as RBJ low shelf with gain=g, scaled by 1/√g to center
-    // the tilt around unity. RBJ shelf is numerically robust at all frequencies.
-    let a_amp = g.sqrt(); // RBJ uses A = √gain
-    let sin_w0 = w0.sin();
-    let cos_w0 = w0.cos();
-    let s = q * std::f64::consts::SQRT_2;
-    let alpha = shelf_alpha(sin_w0, a_amp, s);
-    let two_sqrt_a_alpha = 2.0 * a_amp.sqrt() * alpha;
-    let a0 = (a_amp + 1.0) + (a_amp - 1.0) * cos_w0 + two_sqrt_a_alpha;
-    let a1 = -2.0 * ((a_amp - 1.0) + (a_amp + 1.0) * cos_w0);
-    let a2 = (a_amp + 1.0) + (a_amp - 1.0) * cos_w0 - two_sqrt_a_alpha;
-    let b0 = a_amp * ((a_amp + 1.0) - (a_amp - 1.0) * cos_w0 + two_sqrt_a_alpha);
-    let b1 = 2.0 * a_amp * ((a_amp - 1.0) - (a_amp + 1.0) * cos_w0);
-    let b2 = a_amp * ((a_amp + 1.0) - (a_amp - 1.0) * cos_w0 - two_sqrt_a_alpha);
-    // Scale by 1/√g to center tilt: low shelf has DC=g, Nyquist=1;
-    // after scaling: DC=g/√g=√g, Nyquist=1/√g.
+    // Use Vicanek matched low shelf (gain=g), scaled by 1/√g to center
+    // the tilt around unity: DC=g/√g=√g, Nyquist=1/√g.
+    let c = low_shelf_2(w0, q, g);
     let scale = 1.0 / g.sqrt();
-    let a0_inv = scale / a0;
-    [1.0, a1 / a0, a2 / a0, b0 * a0_inv, b1 * a0_inv, b2 * a0_inv]
+    [c[0], c[1], c[2], c[3] * scale, c[4] * scale, c[5] * scale]
 }
 
 fn allpass_2(w0: f64, q: f64) -> Coeffs {
@@ -298,12 +318,6 @@ pub fn tilt_shelf_1(freq_hz: f64, gain_db: f64, sample_rate: f64) -> Coeffs {
 }
 
 // ── Matched 2nd-order shelves with Q ─────────────────────────────────
-
-fn shelf_alpha(sin_w0: f64, a_amp: f64, s: f64) -> f64 {
-    let s = s.max(0.01);
-    let val = (a_amp + 1.0 / a_amp) * (1.0 / s - 1.0) + 2.0;
-    sin_w0 / 2.0 * val.max(0.001).sqrt()
-}
 
 fn low_shelf_2(w0: f64, q: f64, g: f64) -> Coeffs {
     if (g - 1.0).abs() < 1e-6 {
@@ -425,31 +439,6 @@ pub fn high_shelf_resonant(freq_hz: f64, q: f64, gain_db: f64, sample_rate: f64)
         b1 * a0_inv,
         b2 * a0_inv,
     ]
-}
-
-// ── Flat tilt ───────────────────────────────────────────────────────
-
-pub fn flat_tilt_section(pole_hz: f64, zero_hz: f64, pivot_hz: f64, sample_rate: f64) -> Coeffs {
-    let t = 1.0 / sample_rate;
-    let wp = 2.0 * PI * pivot_hz;
-    let wp_prewarp = (wp * t / 2.0).tan();
-    let pole_analog = 2.0 * PI * pole_hz;
-    let zero_analog = 2.0 * PI * zero_hz;
-    let prewarp = |w: f64| -> f64 {
-        if wp_prewarp.abs() < 1e-30 || (wp * t / 2.0).tan().abs() < 1e-30 {
-            return w;
-        }
-        wp_prewarp * (w * t / 2.0).tan() / (wp * t / 2.0).tan()
-    };
-    let p = prewarp(pole_analog);
-    let z = prewarp(zero_analog);
-    let c = 2.0 / t;
-    let a0 = c + p;
-    let a1 = -c + p;
-    let b0 = c + z;
-    let b1 = -c + z;
-    let a0_inv = 1.0 / a0;
-    [1.0, a1 * a0_inv, 0.0, b0 * a0_inv, b1 * a0_inv, 0.0]
 }
 
 #[cfg(test)]
