@@ -2,13 +2,13 @@
 
 - **Sample Rate:** 48000 Hz
 - **Tolerance:** 0.50 dB RMS
-- **Total:** 3496/5567 passed (62.8%)
+- **Total:** 3511/5567 passed (63.1%)
 
 ## By Filter Type
 
 | Filter | Pass | Fail | Total | Rate |
 |--------|------|------|-------|------|
-| bell | 712 | 504 | 1216 | 58.6% |
+| bell | 730 | 486 | 1216 | 60.0% |
 | low_shelf | 877 | 339 | 1216 | 72.1% |
 | high_shelf | 877 | 339 | 1216 | 72.1% |
 | low_cut | 139 | 165 | 304 | 45.7% |
@@ -19,9 +19,9 @@
 | flat_tilt | 76 | 0 | 76 | 100.0% |
 | allpass | 304 | 0 | 304 | 100.0% |
 
-## Changes from Previous (3478 → 3496, +18)
+## Changes from Previous (3496 → 3511, +15)
 
-- **Shelf low-Q scaling**: Reduced low-Q shelf blend exponent from 1.0 to 0.75,
-  less aggressive Q reduction for Q<1 shelves. Low/high shelf: 346→339 each (-14 total)
-- **1st-order shelf matching**: Moved matching point from fm=0.9 to fm=0.95,
-  improving accuracy near Nyquist. Tilt shelf: 99→95 (-4)
+- **Bell cascade Q compensation**: Apply 15% of theoretical bandwidth compensation
+  √(2^(1/N)−1) for higher-order bell cascades. Widens each peak section slightly
+  to counteract cascade bandwidth narrowing. Bell s5: 204→194 fails (-10),
+  bell s8: 224→216 fails (-8)

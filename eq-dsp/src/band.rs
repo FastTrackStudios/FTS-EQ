@@ -299,11 +299,19 @@ impl Band {
         let g_per = g.powf(1.0 / num as f64);
         let gain_per = 20.0 * g_per.log10();
 
+        // Mild Q compensation for cascade bandwidth narrowing.
+        // Cascading N identical peaks narrows bandwidth by √(2^(1/N)−1).
+        // Apply 15% of theoretical correction to approximate Pro-Q 4's
+        // wider response without breaking the overall shape.
+        let n = self.num_sections as f64;
+        let full_comp = 1.0 / (2.0_f64.powf(1.0 / n) - 1.0).sqrt();
+        let q_adjusted = self.q * (1.0 + 0.15 * (full_comp - 1.0));
+
         for i in 0..self.num_sections {
             let c = coeff::calculate(
                 FilterType::Peak,
                 self.freq_hz,
-                self.q,
+                q_adjusted,
                 gain_per,
                 config.sample_rate,
             );
