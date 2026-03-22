@@ -382,65 +382,6 @@ fn high_shelf_2_matched_q(w0: f64, q: f64, g: f64) -> Coeffs {
     [1.0, a1, a2, b0, b1, b2]
 }
 
-/// Zoelzer parametric low shelf with resonance support.
-/// Uses Q directly (not S). Q=1/√2 gives Butterworth. Q > 1/√2 creates resonance.
-pub fn low_shelf_resonant(freq_hz: f64, q: f64, gain_db: f64, sample_rate: f64) -> Coeffs {
-    let g = 10.0_f64.powf(gain_db / 20.0);
-    if (g - 1.0).abs() < 1e-6 {
-        return PASSTHROUGH;
-    }
-    let w0 = (2.0 * PI * freq_hz / sample_rate).clamp(1e-6, PI - 1e-6);
-    let v = g;
-    let k = 1.0 / (w0 / 2.0).tan();
-    let k2 = k * k;
-    let sqrt_2v = (2.0 * v).sqrt();
-    let sqrt_2 = std::f64::consts::SQRT_2;
-    let a0 = k2 + sqrt_2 * k / q + 1.0;
-    let a1 = 2.0 * (1.0 - k2);
-    let a2 = k2 - sqrt_2 * k / q + 1.0;
-    let b0 = k2 + sqrt_2v * k / q + v;
-    let b1 = 2.0 * (v - k2);
-    let b2 = k2 - sqrt_2v * k / q + v;
-    let a0_inv = 1.0 / a0;
-    [
-        1.0,
-        a1 * a0_inv,
-        a2 * a0_inv,
-        b0 * a0_inv,
-        b1 * a0_inv,
-        b2 * a0_inv,
-    ]
-}
-
-/// Zoelzer parametric high shelf with resonance support.
-pub fn high_shelf_resonant(freq_hz: f64, q: f64, gain_db: f64, sample_rate: f64) -> Coeffs {
-    let g = 10.0_f64.powf(gain_db / 20.0);
-    if (g - 1.0).abs() < 1e-6 {
-        return PASSTHROUGH;
-    }
-    let w0 = (2.0 * PI * freq_hz / sample_rate).clamp(1e-6, PI - 1e-6);
-    let v = g;
-    let k = 1.0 / (w0 / 2.0).tan();
-    let k2 = k * k;
-    let sqrt_2v = (2.0 * v).sqrt();
-    let sqrt_2 = std::f64::consts::SQRT_2;
-    let a0 = k2 + sqrt_2 * k / q + 1.0;
-    let a1 = 2.0 * (1.0 - k2);
-    let a2 = k2 - sqrt_2 * k / q + 1.0;
-    let b0 = v * k2 + sqrt_2v * k / q + 1.0;
-    let b1 = 2.0 * (1.0 - v * k2);
-    let b2 = v * k2 - sqrt_2v * k / q + 1.0;
-    let a0_inv = 1.0 / a0;
-    [
-        1.0,
-        a1 * a0_inv,
-        a2 * a0_inv,
-        b0 * a0_inv,
-        b1 * a0_inv,
-        b2 * a0_inv,
-    ]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

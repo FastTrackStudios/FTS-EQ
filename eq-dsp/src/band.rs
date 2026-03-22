@@ -151,8 +151,6 @@ impl Band {
         for i in 0..num_biquads {
             let bw_q = butterworth_q_for_order(order, i);
             let q_section = if i == num_biquads - 1 {
-                // Last biquad: scale Butterworth Q by user's display Q
-                // self.q = display_q * FRAC_1_SQRT_2, so display_q = self.q / FRAC_1_SQRT_2
                 bw_q * self.q * SQRT_2
             } else {
                 bw_q
@@ -220,13 +218,7 @@ impl Band {
         };
         self.num_sections = total.min(MAX_SECTIONS);
 
-        // Check if shelf resonance is needed (Q > 1 for low/high shelf).
         let q_user = self.q * std::f64::consts::SQRT_2;
-        let use_resonance = q_user > 1.01
-            && matches!(
-                self.filter_type,
-                FilterType::LowShelf | FilterType::HighShelf
-            );
 
         // Distribute gain evenly across all sections (in dB domain).
         let g = 10.0_f64.powf(effective_gain_db / 20.0);
@@ -254,47 +246,32 @@ impl Band {
         let num_biquads = num_2nd.min(self.num_sections - section_idx);
         for i in 0..num_biquads {
             let is_last = i == num_biquads - 1;
-            if is_last && use_resonance {
-                let q_eff = q_user.powf(0.75);
-                let c = match self.filter_type {
-                    FilterType::LowShelf => coeff::low_shelf_resonant(
-                        self.freq_hz,
-                        q_eff,
-                        gain_per_section,
-                        config.sample_rate,
-                    ),
-                    FilterType::HighShelf => coeff::high_shelf_resonant(
-                        self.freq_hz,
-                        q_eff,
-                        gain_per_section,
-                        config.sample_rate,
-                    ),
-                    _ => unreachable!(),
-                };
-                self.set_section_coeffs(section_idx, c);
-            } else {
-                // Last biquad: scale Butterworth Q by display Q for transition width.
-                // Inner biquads: always Butterworth Q for proper cascade shape.
-                let bw_q = butterworth_q(num_2nd, i);
-                let q_section = if is_last {
-                    // Blend Q scaling based on order: full at order ≤ 6,
-                    // tapering off for higher orders where large scaling
-                    // destabilizes the cascade.
-                    let blend = (1.0 - (order as f64 - 6.0) / 12.0).clamp(0.5, 1.0);
-                    let scale = 1.0 + (q_user - 1.0) * blend;
-                    bw_q * scale
+            // Last biquad: scale Butterworth Q by display Q for transition width.
+            // Inner biquads: always Butterworth Q for proper cascade shape.
+            // High Q values naturally produce resonance in the Vicanek matched shelf.
+            let bw_q = butterworth_q(num_2nd, i);
+            let q_section = if is_last {
+                // Scale last biquad Q by display Q with logarithmic compression.
+                // Grows quickly at moderate Q, saturates at high Q to prevent
+                // extreme resonance. q_user=1 → scale=1.
+                let blend = (1.0 - (order as f64 - 6.0) / 12.0).clamp(0.5, 1.0);
+                let scale = if q_user > 1.0 {
+                    1.0 + (q_user.ln() * 1.03 * blend)
                 } else {
-                    bw_q
+                    q_user.powf(blend)
                 };
-                let c = coeff::calculate(
-                    self.filter_type,
-                    self.freq_hz,
-                    q_section,
-                    gain_per_section,
-                    config.sample_rate,
-                );
-                self.set_section_coeffs(section_idx, c);
-            }
+                bw_q * scale
+            } else {
+                bw_q
+            };
+            let c = coeff::calculate(
+                self.filter_type,
+                self.freq_hz,
+                q_section,
+                gain_per_section,
+                config.sample_rate,
+            );
+            self.set_section_coeffs(section_idx, c);
             section_idx += 1;
         }
     }
@@ -430,8 +407,8 @@ impl Band {
 
         // Increase Q per section to compensate for cascade bandwidth expansion.
         // Cascading N identical notch sections widens the -3dB bandwidth;
-        // scaling Q by √N approximately preserves the apparent bandwidth.
-        let q_compensated = self.q * (self.num_sections as f64).sqrt();
+        // scaling Q by N^0.3 approximately preserves the apparent bandwidth.
+        let q_compensated = self.q * (self.num_sections as f64).powf(0.3);
 
         for i in 0..self.num_sections {
             let c = coeff::calculate(
