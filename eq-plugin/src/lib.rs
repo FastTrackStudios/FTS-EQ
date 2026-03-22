@@ -362,7 +362,7 @@ impl FtsEq {
                 // Pro-Q 4 convention: display Q=1.0 = Butterworth (filter Q = 1/√2).
                 let q = bp.q.value() as f64 * std::f64::consts::FRAC_1_SQRT_2;
                 let order = match ft {
-                    FilterType::Lowpass | FilterType::Highpass => {
+                    FilterType::Lowpass | FilterType::Highpass | FilterType::Bandpass => {
                         lp_hp_slope_to_order(bp.slope.value())
                     }
                     _ => slope_to_order(bp.slope.value()),

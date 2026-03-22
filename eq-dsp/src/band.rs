@@ -223,10 +223,17 @@ impl Band {
         };
         self.num_sections = total.min(MAX_SECTIONS);
 
-        // Distribute gain across ALL sections (including 1st-order).
+        // Check if shelf resonance is needed (Q > 1 for low/high shelf).
+        let q_user = self.q * std::f64::consts::SQRT_2;
+        let use_resonance = q_user > 1.01
+            && matches!(
+                self.filter_type,
+                FilterType::LowShelf | FilterType::HighShelf
+            );
+
+        // Distribute gain evenly across all sections (in dB domain).
         let g = 10.0_f64.powf(effective_gain_db / 20.0);
-        let g_per_section = g.powf(1.0 / total as f64);
-        let gain_per_section = 20.0 * g_per_section.log10();
+        let gain_per_section = 20.0 * g.powf(1.0 / total as f64).log10();
 
         let mut section_idx = 0;
 
@@ -251,16 +258,38 @@ impl Band {
             section_idx += 1;
         }
 
-        for i in 0..num_2nd.min(self.num_sections - section_idx) {
-            let q_section = butterworth_q(num_2nd, i);
-            let c = coeff::calculate(
-                self.filter_type,
-                self.freq_hz,
-                q_section,
-                gain_per_section,
-                config.sample_rate,
-            );
-            self.set_section_coeffs(section_idx, c);
+        let num_biquads = num_2nd.min(self.num_sections - section_idx);
+        for i in 0..num_biquads {
+            let is_last = i == num_biquads - 1;
+            if is_last && use_resonance {
+                let q_eff = q_user.powf(0.75);
+                let c = match self.filter_type {
+                    FilterType::LowShelf => coeff::low_shelf_resonant(
+                        self.freq_hz,
+                        q_eff,
+                        gain_per_section,
+                        config.sample_rate,
+                    ),
+                    FilterType::HighShelf => coeff::high_shelf_resonant(
+                        self.freq_hz,
+                        q_eff,
+                        gain_per_section,
+                        config.sample_rate,
+                    ),
+                    _ => unreachable!(),
+                };
+                self.set_section_coeffs(section_idx, c);
+            } else {
+                let q_section = butterworth_q(num_2nd, i);
+                let c = coeff::calculate(
+                    self.filter_type,
+                    self.freq_hz,
+                    q_section,
+                    gain_per_section,
+                    config.sample_rate,
+                );
+                self.set_section_coeffs(section_idx, c);
+            }
             section_idx += 1;
         }
     }
@@ -341,69 +370,38 @@ impl Band {
         }
     }
 
-    /// Bandpass via HP + LP cascade.
+    /// Bandpass via cascaded 2nd-order matched bandpass sections.
     ///
-    /// Pro-Q 4 implements bandpass as a highpass at the lower bandwidth edge
-    /// cascaded with a lowpass at the upper edge, each at the requested slope.
+    /// Pro-Q 4's bandpass uses resonant bandpass filters centered at the
+    /// specified frequency. Higher slopes cascade more sections.
     fn update_bandpass(&mut self, order: usize, config: AudioConfig) {
-        // Pro-Q 4 bypasses bandpass at slope 0.
-        if order <= 1 {
+        if order == 0 {
             self.num_sections = 0;
             return;
         }
 
-        // Compute bandwidth edges from Q
-        let halfbw = (0.5 / self.q).asinh() / 2.0_f64.ln();
-        let scale = 2.0_f64.powf(halfbw);
-        let f_lo = self.freq_hz / scale;
-        let f_hi = self.freq_hz * scale;
+        // Each 2nd-order bandpass section provides ~6 dB/oct rolloff per side.
+        // Slope maps to order, and we need ceil(order/2) biquad sections
+        // (since each biquad is 2nd order).
+        // For odd orders, we still use a 2nd-order section — there's no
+        // meaningful 1st-order bandpass.
+        let num_sections = ((order + 1) / 2).max(1).min(MAX_SECTIONS);
+        self.num_sections = num_sections;
 
-        let has_first_order = order % 2 == 1;
-        let num_2nd = order / 2;
-        let sections_per_side = if has_first_order {
-            num_2nd + 1
-        } else {
-            num_2nd
-        };
-        self.num_sections = (sections_per_side * 2).min(MAX_SECTIONS);
-
-        let mut idx = 0;
-
-        if has_first_order && idx + 1 < self.num_sections {
-            let c_hp = coeff::highpass_1(f_lo, config.sample_rate);
-            self.set_section_coeffs(idx, c_hp);
-            idx += 1;
-            let c_lp = coeff::lowpass_1(f_hi, config.sample_rate);
-            self.set_section_coeffs(idx, c_lp);
-            idx += 1;
-        }
-
-        // 2nd-order sections with Butterworth Q
-        for i in 0..num_2nd {
-            if idx + 1 >= self.num_sections {
-                break;
-            }
-            let q_section = butterworth_q(num_2nd, i);
-
-            let c_hp = coeff::calculate(
-                FilterType::Highpass,
-                f_lo,
+        for i in 0..num_sections {
+            let q_section = if i == num_sections - 1 {
+                self.q // Last section: user Q for resonance control
+            } else {
+                butterworth_q(num_sections, i) // Others: Butterworth Q
+            };
+            let c = coeff::calculate(
+                FilterType::Bandpass,
+                self.freq_hz,
                 q_section,
                 0.0,
                 config.sample_rate,
             );
-            self.set_section_coeffs(idx, c_hp);
-            idx += 1;
-
-            let c_lp = coeff::calculate(
-                FilterType::Lowpass,
-                f_hi,
-                q_section,
-                0.0,
-                config.sample_rate,
-            );
-            self.set_section_coeffs(idx, c_lp);
-            idx += 1;
+            self.set_section_coeffs(i, c);
         }
     }
 
