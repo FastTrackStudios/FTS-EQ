@@ -5,7 +5,7 @@
 
 use std::sync::atomic::Ordering;
 
-use audio_gui::prelude::{theme, DragProvider, LevelMeterDb};
+use audio_gui::prelude::{use_init_theme, DragProvider, LevelMeterDb};
 use audio_gui::viz::eq_graph::{get_band_color, EqBand, EqBandShape, EqGraph};
 use fts_plugin_core::prelude::*;
 
@@ -47,6 +47,9 @@ fn int_to_shape(v: i32) -> EqBandShape {
 /// Root editor component.
 #[component]
 pub fn App() -> Element {
+    let t = use_init_theme();
+    let t = *t.read();
+
     let shared = use_context::<SharedState>();
     let ui = shared.get::<EqUiState>().expect("EqUiState missing");
     let ctx = use_param_context();
@@ -63,7 +66,7 @@ pub fn App() -> Element {
         .collect();
 
     // Focused band for detail panel
-    let mut focused_band: Signal<Option<usize>> = use_signal(|| None);
+    let focused_band: Signal<Option<usize>> = use_signal(|| None);
 
     // Build EqBand vec from current parameter state
     let mut bands_vec: Vec<EqBand> = Vec::with_capacity(NUM_BANDS);
@@ -89,43 +92,52 @@ pub fn App() -> Element {
     // Count active bands
     let active_count = bands_signal.read().iter().filter(|b| b.used).count();
 
+    let base_css = t.base_css();
+    let root_style = t.root_style();
+    let spacing_root = t.spacing_root;
+    let spacing_section = t.spacing_section;
+    let spacing_tight = t.spacing_tight;
+    let border = t.border;
+    let shadow_subtle = t.shadow_subtle;
+    let font_size_title = t.font_size_title;
+    let text_bright = t.text_bright;
+    let text_dim = t.text_dim;
+    let style_label = t.style_label();
+    let style_inset = t.style_inset();
+    let style_card = t.style_card();
+    let style_value = t.style_value();
+
     rsx! {
-        document::Style { {theme::BASE_CSS} }
+        document::Style { {base_css} }
 
         DragProvider {
         div {
             style: format!(
-                "{ROOT} display:flex; flex-direction:column; overflow:hidden;",
-                ROOT = theme::ROOT_STYLE,
+                "{root_style} display:flex; flex-direction:column; overflow:hidden;",
             ),
 
             // ── Header ───────────────────────────────────────────
             div {
                 style: format!(
                     "display:flex; justify-content:space-between; align-items:center; \
-                     padding:{SPACING}; border-bottom:1px solid {BORDER}; \
-                     box-shadow:{SHADOW};",
-                    SPACING = theme::SPACING_ROOT,
-                    BORDER = theme::BORDER,
-                    SHADOW = theme::SHADOW_SUBTLE,
+                     padding:{spacing_root}; border-bottom:1px solid {border}; \
+                     box-shadow:{shadow_subtle};",
                 ),
                 div {
                     style: "display:flex; align-items:baseline; gap:12px;",
                     div {
                         style: format!(
-                            "font-size:{SIZE}; font-weight:700; letter-spacing:0.5px; color:{CLR};",
-                            SIZE = theme::FONT_SIZE_TITLE,
-                            CLR = theme::TEXT_BRIGHT,
+                            "font-size:{font_size_title}; font-weight:700; letter-spacing:0.5px; color:{text_bright};",
                         ),
                         "FTS EQ"
                     }
                     div {
-                        style: format!("{}", theme::STYLE_LABEL),
+                        style: format!("{style_label}"),
                         "{active_count} bands active"
                     }
                 }
                 div {
-                    style: format!("{}", theme::STYLE_LABEL),
+                    style: format!("{style_label}"),
                     "FastTrackStudio"
                 }
             }
@@ -133,8 +145,7 @@ pub fn App() -> Element {
             // ── Main EQ graph ────────────────────────────────────
             div {
                 style: format!(
-                    "{INSET} flex:1; min-height:0; position:relative; margin:4px 6px;",
-                    INSET = theme::STYLE_INSET,
+                    "{style_inset} flex:1; min-height:0; position:relative; margin:4px 6px;",
                 ),
                 EqGraph {
                     bands: bands_signal,
@@ -275,13 +286,9 @@ pub fn App() -> Element {
             // ── Bottom bar: meters + output gain ──────────────────
             div {
                 style: format!(
-                    "{CARD} display:flex; align-items:center; gap:{GAP}; \
-                     padding:{SPACING}; border-top:1px solid {BORDER}; \
+                    "{style_card} display:flex; align-items:center; gap:{spacing_section}; \
+                     padding:{spacing_root}; border-top:1px solid {border}; \
                      border-radius:0;",
-                    CARD = theme::STYLE_CARD,
-                    GAP = theme::SPACING_SECTION,
-                    SPACING = theme::SPACING_ROOT,
-                    BORDER = theme::BORDER,
                 ),
                 LevelMeterDb { level_db: input_db, label: "IN".to_string(), height: 40.0 }
                 LevelMeterDb { level_db: output_db, label: "OUT".to_string(), height: 40.0 }
@@ -309,17 +316,15 @@ pub fn App() -> Element {
                         let op = if enabled { "1.0" } else { "0.5" };
                         (text, color.to_string(), op.to_string())
                     } else {
-                        (String::new(), theme::TEXT_DIM.to_string(), "0".to_string())
+                        (String::new(), text_dim.to_string(), "0".to_string())
                     };
 
                     rsx! {
                         div {
                             style: format!(
-                                "{VALUE} padding:{TIGHT} 10px; margin-left:8px; \
+                                "{style_value} padding:{spacing_tight} 10px; margin-left:8px; \
                                  border-left:2px solid {detail_color}; \
                                  opacity:{detail_opacity};",
-                                VALUE = theme::STYLE_VALUE,
-                                TIGHT = theme::SPACING_TIGHT,
                             ),
                             "{detail_text}"
                         }
@@ -332,7 +337,7 @@ pub fn App() -> Element {
                 div {
                     style: "display:flex; align-items:center; gap:8px;",
                     span {
-                        style: format!("{}", theme::STYLE_LABEL),
+                        style: format!("{style_label}"),
                         "Output"
                     }
                     audio_gui::controls::knob::Knob {
