@@ -258,7 +258,7 @@ impl Band {
                 let scale = if q_user > 1.0 {
                     1.0 + (q_user.ln() * 1.03 * blend)
                 } else {
-                    q_user.powf(blend)
+                    q_user.powf(blend * 0.75)
                 };
                 bw_q * scale
             } else {

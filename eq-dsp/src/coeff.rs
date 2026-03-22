@@ -280,7 +280,7 @@ fn high_shelf_1_matched(freq_hz: f64, g: f64, sample_rate: f64) -> Coeffs {
     let fc = freq_hz / (sample_rate / 2.0); // normalize to Nyquist
     let fc = fc.max(1e-6);
     let fc_sq = fc * fc;
-    let fm = 0.9_f64; // matching point slightly below Nyquist
+    let fm = 0.95_f64; // matching point close to Nyquist
     let phi_m = 1.0 - (PI * fm).cos();
 
     // Use eq. 12 with matching point fm = 0.9
