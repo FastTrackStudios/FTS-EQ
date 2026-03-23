@@ -220,22 +220,25 @@ impl Band {
 
         let q_user = self.q * std::f64::consts::SQRT_2;
 
-        // Distribute gain evenly across all sections (in dB domain).
-        let g = 10.0_f64.powf(effective_gain_db / 20.0);
-        let gain_per_section = 20.0 * g.powf(1.0 / total as f64).log10();
+        // Distribute gain proportional to pole count: 2nd-order sections get
+        // 2x the gain of 1st-order sections. This allows proper resonance at
+        // high Q by concentrating gain in the resonant biquad sections.
+        let gain_per_pole = effective_gain_db / order as f64;
+        let gain_1st = gain_per_pole;
+        let gain_2nd = gain_per_pole * 2.0;
 
         let mut section_idx = 0;
 
         if has_first_order && section_idx < self.num_sections {
             let c = match self.filter_type {
                 FilterType::LowShelf => {
-                    coeff::low_shelf_1(self.freq_hz, gain_per_section, config.sample_rate)
+                    coeff::low_shelf_1(self.freq_hz, gain_1st, config.sample_rate)
                 }
                 FilterType::HighShelf => {
-                    coeff::high_shelf_1(self.freq_hz, gain_per_section, config.sample_rate)
+                    coeff::high_shelf_1(self.freq_hz, gain_1st, config.sample_rate)
                 }
                 FilterType::TiltShelf => {
-                    coeff::tilt_shelf_1(self.freq_hz, gain_per_section, config.sample_rate)
+                    coeff::tilt_shelf_1(self.freq_hz, gain_1st, config.sample_rate)
                 }
                 _ => unreachable!(),
             };
@@ -246,14 +249,8 @@ impl Band {
         let num_biquads = num_2nd.min(self.num_sections - section_idx);
         for i in 0..num_biquads {
             let is_last = i == num_biquads - 1;
-            // Last biquad: scale Butterworth Q by display Q for transition width.
-            // Inner biquads: always Butterworth Q for proper cascade shape.
-            // High Q values naturally produce resonance in the Vicanek matched shelf.
             let bw_q = butterworth_q(num_2nd, i);
             let q_section = if is_last {
-                // Scale last biquad Q by display Q with logarithmic compression.
-                // Grows quickly at moderate Q, saturates at high Q to prevent
-                // extreme resonance. q_user=1 → scale=1.
                 let blend = (1.0 - (order as f64 - 6.0) / 12.0).clamp(0.5, 1.0);
                 let scale = if q_user > 1.0 {
                     1.0 + (q_user.ln() * 1.03 * blend)
@@ -268,7 +265,7 @@ impl Band {
                 self.filter_type,
                 self.freq_hz,
                 q_section,
-                gain_per_section,
+                gain_2nd,
                 config.sample_rate,
             );
             self.set_section_coeffs(section_idx, c);
@@ -361,28 +358,20 @@ impl Band {
     }
 
     /// Bandpass via cascaded 2nd-order matched bandpass sections.
-    ///
-    /// Pro-Q 4's bandpass uses resonant bandpass filters centered at the
-    /// specified frequency. Higher slopes cascade more sections.
     fn update_bandpass(&mut self, order: usize, config: AudioConfig) {
         if order == 0 {
             self.num_sections = 0;
             return;
         }
 
-        // Each 2nd-order bandpass section provides ~6 dB/oct rolloff per side.
-        // Slope maps to order, and we need ceil(order/2) biquad sections
-        // (since each biquad is 2nd order).
-        // For odd orders, we still use a 2nd-order section — there's no
-        // meaningful 1st-order bandpass.
         let num_sections = ((order + 1) / 2).max(1).min(MAX_SECTIONS);
         self.num_sections = num_sections;
 
         for i in 0..num_sections {
             let q_section = if i == num_sections - 1 {
-                self.q // Last section: user Q for resonance control
+                self.q
             } else {
-                butterworth_q(num_sections, i) // Others: Butterworth Q
+                butterworth_q(num_sections, i)
             };
             let c = coeff::calculate(
                 FilterType::Bandpass,

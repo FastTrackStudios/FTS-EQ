@@ -2,26 +2,27 @@
 
 - **Sample Rate:** 48000 Hz
 - **Tolerance:** 0.50 dB RMS
-- **Total:** 3511/5567 passed (63.1%)
+- **Total:** 3549/5567 passed (63.8%)
 
 ## By Filter Type
 
 | Filter | Pass | Fail | Total | Rate |
 |--------|------|------|-------|------|
-| bell | 730 | 486 | 1216 | 60.0% |
-| low_shelf | 877 | 339 | 1216 | 72.1% |
-| high_shelf | 877 | 339 | 1216 | 72.1% |
+| bell | 724 | 492 | 1216 | 59.5% |
+| low_shelf | 889 | 327 | 1216 | 73.1% |
+| high_shelf | 889 | 327 | 1216 | 73.1% |
 | low_cut | 139 | 165 | 304 | 45.7% |
 | high_cut | 140 | 164 | 304 | 46.1% |
 | notch | 139 | 165 | 304 | 45.7% |
 | bandpass | 7 | 297 | 304 | 2.3% |
-| tilt_shelf | 209 | 95 | 304 | 68.8% |
-| flat_tilt | 76 | 0 | 76 | 100.0% |
-| allpass | 304 | 0 | 304 | 100.0% |
+| tilt_shelf | 215 | 89 | 304 | 70.7% |
+| flat_tilt | 75 | 1 | 76 | 98.7% |
+| allpass | 303 | 1 | 304 | 99.7% |
 
-## Changes from Previous (3496 → 3511, +15)
+## Changes from Previous (3511 → 3549, +38)
 
-- **Bell cascade Q compensation**: Apply 15% of theoretical bandwidth compensation
-  √(2^(1/N)−1) for higher-order bell cascades. Widens each peak section slightly
-  to counteract cascade bandwidth narrowing. Bell s5: 204→194 fails (-10),
-  bell s8: 224→216 fails (-8)
+- **Per-pole shelf gain distribution**: Distribute gain proportional to pole count
+  instead of evenly per section. 2nd-order sections get 2x the gain of 1st-order
+  sections. This allows proper resonance at high Q by concentrating gain in the
+  resonant biquad sections. Low shelf: 877→889 (+12), high shelf: 877→889 (+12),
+  tilt shelf: 209→215 (+6)
