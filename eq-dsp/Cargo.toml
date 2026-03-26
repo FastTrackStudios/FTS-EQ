@@ -12,6 +12,7 @@ test-util = ["rustfft"]
 
 [dependencies]
 fts-dsp = { path = "../../fts-dsp" }
+halfband = "0.2"
 rustfft = { version = "6.2", optional = true }
 
 [dev-dependencies]

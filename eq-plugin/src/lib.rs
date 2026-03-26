@@ -10,6 +10,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use eq_dsp::filter_type::{FilterStructure, FilterType};
+use eq_dsp::oversample::EqOversampler;
 use eq_dsp::EqChain;
 use fts_dsp::{AudioConfig, Processor};
 
@@ -239,12 +240,19 @@ impl Default for FtsEqParams {
 
 // ── Plugin ──────────────────────────────────────────────────────────
 
+/// Internal oversampling factor — Pro-Q 4 runs at 4× internally.
+const OVERSAMPLE_RATIO: usize = 4;
+
 struct FtsEq {
     params: Arc<FtsEqParams>,
     ui_state: Arc<EqUiState>,
     editor_state: Arc<DioxusState>,
     chain: EqChain,
+    oversampler: EqOversampler,
     sample_rate: f64,
+    // Scratch buffers for f64 block processing
+    left_buf: Vec<f64>,
+    right_buf: Vec<f64>,
     // Spectrum analysis state
     fft_buffer: Vec<f32>,
     fft_pos: usize,
@@ -272,7 +280,10 @@ impl Default for FtsEq {
             ui_state,
             editor_state: DioxusState::new(|| (1000, 600)),
             chain,
+            oversampler: EqOversampler::new(),
             sample_rate: 48000.0,
+            left_buf: Vec::new(),
+            right_buf: Vec::new(),
             fft_buffer: vec![0.0; FFT_SIZE],
             fft_pos: 0,
             fft_window,
@@ -496,15 +507,25 @@ impl Plugin for FtsEq {
         self.ui_state
             .sample_rate
             .store(buffer_config.sample_rate, Ordering::Relaxed);
+
+        // EQ chain runs at oversampled rate for Pro-Q 4 parity
+        let os_rate = self.sample_rate * OVERSAMPLE_RATIO as f64;
         self.chain.update(AudioConfig {
-            sample_rate: self.sample_rate,
-            max_buffer_size: buffer_config.max_buffer_size as usize,
+            sample_rate: os_rate,
+            max_buffer_size: buffer_config.max_buffer_size as usize * OVERSAMPLE_RATIO,
         });
+
+        // Pre-allocate scratch buffers
+        let max_samples = buffer_config.max_buffer_size as usize;
+        self.left_buf.resize(max_samples, 0.0);
+        self.right_buf.resize(max_samples, 0.0);
+
         true
     }
 
     fn reset(&mut self) {
         self.chain.reset();
+        self.oversampler.reset();
     }
 
     fn process(
@@ -516,74 +537,83 @@ impl Plugin for FtsEq {
         self.sync_params();
 
         let output_gain = fts_dsp::db::db_to_linear(self.params.output_gain_db.value() as f64);
+        let n = buffer.samples();
 
-        for mut frame in buffer.iter_samples() {
-            let mut channels = frame.iter_mut();
-            let left_ref = channels.next().unwrap();
-            let right_ref = channels.next().unwrap();
+        // Ensure scratch buffers are large enough
+        self.left_buf.resize(n, 0.0);
+        self.right_buf.resize(n, 0.0);
 
-            let mut left = *left_ref as f64;
-            let mut right = *right_ref as f64;
+        // Convert f32 buffer → f64 scratch, track input peak
+        let mut input_peak: f32 = 0.0;
+        for (i, mut frame) in buffer.iter_samples().enumerate() {
+            let l = *frame.get_mut(0).unwrap() as f64;
+            let r = *frame.get_mut(1).unwrap() as f64;
+            input_peak = input_peak.max(l.abs().max(r.abs()) as f32);
+            self.left_buf[i] = l;
+            self.right_buf[i] = r;
+        }
 
-            // Track input peak
-            let input_peak = left.abs().max(right.abs()) as f32;
+        // Process EQ chain through oversampler (4× internal rate)
+        let chain = &mut self.chain;
+        self.oversampler.process_stereo(
+            &mut self.left_buf[..n],
+            &mut self.right_buf[..n],
+            |l, r| {
+                chain.process(l, r);
+            },
+        );
 
-            // Process through all EQ bands
-            for i in 0..NUM_BANDS {
-                if let Some(band) = self.chain.band_mut(i) {
-                    left = band.tick(left, 0);
-                    right = band.tick(right, 1);
-                }
-            }
+        // Write back to f32 buffer, apply output gain, metering + FFT
+        let mut output_peak: f32 = 0.0;
+        for (i, mut frame) in buffer.iter_samples().enumerate() {
+            let l = self.left_buf[i] * output_gain;
+            let r = self.right_buf[i] * output_gain;
 
-            // Apply output gain
-            left *= output_gain;
-            right *= output_gain;
+            *frame.get_mut(0).unwrap() = l as f32;
+            *frame.get_mut(1).unwrap() = r as f32;
 
-            *left_ref = left as f32;
-            *right_ref = right as f32;
+            output_peak = output_peak.max(l.abs().max(r.abs()) as f32);
 
-            // Accumulate post-EQ mono into FFT buffer
-            let mono = (left + right) as f32 * 0.5;
+            // Spectrum FFT accumulation
+            let mono = (l + r) as f32 * 0.5;
             self.fft_buffer[self.fft_pos] = mono;
             self.fft_pos += 1;
             if self.fft_pos >= FFT_SIZE {
                 self.run_spectrum_fft();
                 self.fft_pos = 0;
             }
+        }
 
-            // Track output peak
-            let output_peak = (left.abs().max(right.abs())) as f32;
-
-            // Update metering (exponential peak decay)
-            let prev_in = self.ui_state.input_peak_db.load(Ordering::Relaxed);
-            let in_db = if input_peak > 0.0 {
-                20.0 * input_peak.log10()
-            } else {
-                -100.0
-            };
-            let new_in = if in_db > prev_in {
+        // Update peak meters
+        let prev_in = self.ui_state.input_peak_db.load(Ordering::Relaxed);
+        let in_db = if input_peak > 0.0 {
+            20.0 * input_peak.log10()
+        } else {
+            -100.0
+        };
+        self.ui_state.input_peak_db.store(
+            if in_db > prev_in {
                 in_db
             } else {
                 prev_in - 0.3
-            };
-            self.ui_state.input_peak_db.store(new_in, Ordering::Relaxed);
+            },
+            Ordering::Relaxed,
+        );
 
-            let prev_out = self.ui_state.output_peak_db.load(Ordering::Relaxed);
-            let out_db = if output_peak > 0.0 {
-                20.0 * output_peak.log10()
-            } else {
-                -100.0
-            };
-            let new_out = if out_db > prev_out {
+        let prev_out = self.ui_state.output_peak_db.load(Ordering::Relaxed);
+        let out_db = if output_peak > 0.0 {
+            20.0 * output_peak.log10()
+        } else {
+            -100.0
+        };
+        self.ui_state.output_peak_db.store(
+            if out_db > prev_out {
                 out_db
             } else {
                 prev_out - 0.3
-            };
-            self.ui_state
-                .output_peak_db
-                .store(new_out, Ordering::Relaxed);
-        }
+            },
+            Ordering::Relaxed,
+        );
 
         ProcessStatus::Normal
     }

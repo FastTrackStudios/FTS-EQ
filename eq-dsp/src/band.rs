@@ -357,20 +357,28 @@ impl Band {
         }
     }
 
-    /// Bandpass via cascaded 2nd-order matched bandpass sections.
+    /// Bandpass via cascaded 2nd-order BPF sections.
+    ///
+    /// Uses Butterworth pole placement: each section gets a different Q
+    /// from the Butterworth distribution, with the last section scaled by
+    /// the user's Q for resonance control.
     fn update_bandpass(&mut self, order: usize, config: AudioConfig) {
         if order == 0 {
             self.num_sections = 0;
             return;
         }
 
-        let num_sections = ((order + 1) / 2).max(1).min(MAX_SECTIONS);
+        let num_sections = (order / 2).max(1).min(MAX_SECTIONS);
         self.num_sections = num_sections;
 
         for i in 0..num_sections {
-            let q_section = if i == num_sections - 1 {
+            let q_section = if num_sections == 1 {
+                self.q
+            } else if i == num_sections - 1 {
+                // Last section: user Q controls resonance
                 self.q
             } else {
+                // Inner sections: Butterworth Q distribution
                 butterworth_q(num_sections, i)
             };
             let c = coeff::calculate(

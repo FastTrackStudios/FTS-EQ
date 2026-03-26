@@ -29,6 +29,7 @@ pub mod band;
 pub mod chain;
 pub mod coeff;
 pub mod filter_type;
+pub mod oversample;
 pub mod response;
 pub mod section;
 
