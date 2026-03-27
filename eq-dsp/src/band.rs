@@ -220,12 +220,17 @@ impl Band {
 
         let q_user = self.q * std::f64::consts::SQRT_2;
 
-        // Distribute gain proportional to pole count: 2nd-order sections get
-        // 2x the gain of 1st-order sections. This allows proper resonance at
-        // high Q by concentrating gain in the resonant biquad sections.
-        let gain_per_pole = effective_gain_db / order as f64;
-        let gain_1st = gain_per_pole;
-        let gain_2nd = gain_per_pole * 2.0;
+        // Gain distribution between 1st-order and biquad sections.
+        // For order=3 (1st-order + single biquad), put only 20% gain in the
+        // 1st-order section. Its Vicanek matched design cramps at Nyquist,
+        // while the biquad's II-pole + mag-matched approach handles high
+        // frequencies much better.
+        let (gain_1st, gain_2nd) = if order == 3 {
+            (effective_gain_db * 0.20, effective_gain_db * 0.80)
+        } else {
+            let gain_per_pole = effective_gain_db / order as f64;
+            (gain_per_pole, gain_per_pole * 2.0)
+        };
 
         let mut section_idx = 0;
 
