@@ -214,6 +214,20 @@ pub struct FtsEqParams {
     #[id = "output_gain"]
     pub output_gain_db: FloatParam,
 
+    /// Display dB range for the EQ graph (0=6dB, 1=12dB, 2=18dB, 3=24dB, 4=30dB).
+    #[id = "db_range"]
+    pub db_range: IntParam,
+
+    /// Global gain scale (0-200%). Multiplies all band gains proportionally.
+    #[id = "gain_scale"]
+    pub gain_scale: FloatParam,
+
+    // Hidden tuning parameters for coefficient optimization.
+    // These are not shown in the UI but can be set via the CLAP API
+    // by the analyzer's sweep-eq command.
+    #[id = "tune_peak_q_comp"]
+    pub tune_peak_q_comp: FloatParam,
+
     #[nested(array, group = "Band {}")]
     pub bands: [BandParams; NUM_BANDS],
 }
@@ -231,6 +245,38 @@ impl Default for FtsEqParams {
             )
             .with_unit(" dB")
             .with_value_to_string(formatters::v2s_f32_rounded(1)),
+
+            db_range: IntParam::new(
+                "dB Range",
+                3, // Default: 24dB (index 3)
+                IntRange::Linear { min: 0, max: 4 },
+            )
+            .with_value_to_string(Arc::new(|v| match v {
+                0 => "6 dB".to_string(),
+                1 => "12 dB".to_string(),
+                2 => "18 dB".to_string(),
+                3 => "24 dB".to_string(),
+                4 => "30 dB".to_string(),
+                _ => format!("{v}"),
+            })),
+
+            gain_scale: FloatParam::new(
+                "Scale",
+                100.0,
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: 200.0,
+                },
+            )
+            .with_unit("%")
+            .with_value_to_string(formatters::v2s_f32_rounded(0)),
+
+            tune_peak_q_comp: FloatParam::new(
+                "Tune: Peak Q Comp",
+                0.105,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            )
+            .with_value_to_string(formatters::v2s_f32_rounded(4)),
 
             bands: std::array::from_fn(|i| BandParams::new(i)),
         }
@@ -263,11 +309,12 @@ impl Default for FtsEq {
         for _ in 0..NUM_BANDS {
             chain.add_band();
         }
-        // Hann window for FFT
+        // Blackman-Harris window for FFT (better sidelobe rejection than Hann,
+        // matching ReEQ's default and standard for spectrum analyzers)
         let fft_window: Vec<f32> = (0..FFT_SIZE)
             .map(|i| {
-                let t = i as f32 / (FFT_SIZE - 1) as f32;
-                0.5 * (1.0 - (2.0 * std::f32::consts::PI * t).cos())
+                let t = 2.0 * std::f32::consts::PI * i as f32 / (FFT_SIZE - 1) as f32;
+                0.35875 - 0.48829 * t.cos() + 0.14128 * (2.0 * t).cos() - 0.01168 * (3.0 * t).cos()
             })
             .collect();
         Self {
@@ -363,7 +410,8 @@ impl FtsEq {
                 };
                 let ft = shape_to_filter_type(bp.filter_type.value());
                 let freq = bp.freq_hz.value() as f64;
-                let gain = bp.gain_db.value() as f64;
+                let scale = self.params.gain_scale.value() as f64 / 100.0;
+                let gain = bp.gain_db.value() as f64 * scale;
                 // Pro-Q 4 convention: display Q=1.0 = Butterworth (filter Q = 1/√2).
                 let q = bp.q.value() as f64 * std::f64::consts::FRAC_1_SQRT_2;
                 let order = match ft {
@@ -373,12 +421,15 @@ impl FtsEq {
                     _ => slope_to_order(bp.slope.value()),
                 };
 
+                let peak_q_comp = self.params.tune_peak_q_comp.value() as f64;
+
                 if band.enabled != enabled
                     || band.filter_type != ft
                     || (band.freq_hz - freq).abs() > 0.01
                     || (band.gain_db - gain).abs() > 0.01
                     || (band.q - q).abs() > 0.001
                     || band.order != order
+                    || (band.peak_q_comp - peak_q_comp).abs() > 0.0001
                 {
                     band.enabled = enabled;
                     band.filter_type = ft;
@@ -386,6 +437,7 @@ impl FtsEq {
                     band.gain_db = gain;
                     band.q = q;
                     band.order = order;
+                    band.peak_q_comp = peak_q_comp;
                     band.structure = FilterStructure::Tdf2;
                     self.chain.update_band(i);
                 }
@@ -393,6 +445,11 @@ impl FtsEq {
         }
     }
 }
+
+/// Spectral tilt in dB/octave (4.5 dB/oct compensates for typical music spectrum slope).
+const SPECTRUM_TILT_DB_PER_OCT: f32 = 4.5;
+/// Reference frequency for tilt compensation.
+const SPECTRUM_TILT_REF_HZ: f32 = 1000.0;
 
 impl FtsEq {
     /// Run FFT on accumulated buffer and write spectrum bins to UI state.
@@ -419,6 +476,9 @@ impl FtsEq {
         let log_min = min_freq.log10();
         let log_max = max_freq.log10();
 
+        // Decay constant for smooth falloff (higher = slower decay / more visible trails)
+        let decay = 0.80_f32;
+
         // Map logarithmically-spaced UI bins to FFT bins
         for i in 0..SPECTRUM_BINS {
             let t = i as f32 / (SPECTRUM_BINS - 1) as f32;
@@ -435,28 +495,35 @@ impl FtsEq {
             let bin_lo = ((freq / bin_hz) as usize).max(1).min(half - 1);
             let bin_hi = ((freq_next / bin_hz) as usize).max(bin_lo + 1).min(half);
 
-            // Average magnitudes in the range
-            let mut sum_mag = 0.0_f32;
-            let count = (bin_hi - bin_lo).max(1);
+            // Peak magnitude in the range (peak-hold gives better transient response
+            // than averaging, making the analyzer feel more responsive)
+            let mut peak_mag = 0.0_f32;
             for b in bin_lo..bin_hi {
                 let mag = complex_buf[b].norm();
-                sum_mag += mag;
+                peak_mag = peak_mag.max(mag);
             }
-            let avg_mag = sum_mag / count as f32;
 
             // Convert to dB with normalization
-            let db = if avg_mag > 1e-10 {
-                20.0 * avg_mag.log10() - 20.0 * (FFT_SIZE as f32 / 2.0).log10()
+            let mut db = if peak_mag > 1e-10 {
+                20.0 * peak_mag.log10() - 20.0 * (FFT_SIZE as f32 / 2.0).log10()
             } else {
                 -100.0
             };
 
+            // Apply spectral tilt compensation (4.5 dB/oct around 1kHz).
+            // This makes the spectrum appear flatter for typical music content,
+            // matching the approach used by ReEQ, Pro-Q, and ZLEqualizer.
+            let octaves_from_ref = (freq / SPECTRUM_TILT_REF_HZ).log2();
+            db += SPECTRUM_TILT_DB_PER_OCT * octaves_from_ref;
+
             // Smooth with previous value (exponential decay)
             let prev = self.ui_state.spectrum_bins[i].load(Ordering::Relaxed);
             let smoothed = if db > prev {
-                db
+                // Fast attack: quickly rise to new peaks
+                prev * 0.3 + db * 0.7
             } else {
-                prev * 0.85 + db * 0.15
+                // Smooth release: gradual decay
+                prev * decay + db * (1.0 - decay)
             };
             self.ui_state.spectrum_bins[i].store(smoothed, Ordering::Relaxed);
         }
