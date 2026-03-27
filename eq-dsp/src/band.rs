@@ -256,7 +256,7 @@ impl Band {
             let is_last = i == num_biquads - 1;
             let bw_q = butterworth_q(num_2nd, i);
             let q_section = if is_last {
-                let blend = (1.0 - (order as f64 - 6.0) / 12.0).clamp(0.5, 1.0);
+                let blend = (1.0 - (order as f64 - 3.0) / 10.0).clamp(0.5, 1.0);
                 let scale = if q_user > 1.0 {
                     1.0 + (q_user.ln() * 1.03 * blend)
                 } else {
