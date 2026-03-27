@@ -280,10 +280,8 @@ fn high_shelf_1_matched(freq_hz: f64, g: f64, sample_rate: f64) -> Coeffs {
     let fc = freq_hz / (sample_rate / 2.0); // normalize to Nyquist
     let fc = fc.max(1e-6);
     let fc_sq = fc * fc;
-    let fm = 0.95_f64; // matching point close to Nyquist
+    let fm = 0.8_f64; // matching point
     let phi_m = 1.0 - (PI * fm).cos();
-
-    // Use eq. 12 with matching point fm = 0.9
     let alpha = (2.0 / (PI * PI)) * (1.0 / (fm * fm) + 1.0 / (g * fc_sq)) - 1.0 / phi_m;
     let beta = (2.0 / (PI * PI)) * (1.0 / (fm * fm) + g / fc_sq) - 1.0 / phi_m;
 
@@ -335,51 +333,164 @@ fn high_shelf_2(w0: f64, q: f64, g: f64) -> Coeffs {
     high_shelf_2_matched_q(w0, q, g)
 }
 
-/// Vicanek-style matched 2nd-order high shelf with arbitrary Q.
-/// Uses impulse-invariance for poles + magnitude matching at DC/Nyquist/corner.
-/// The analog prototype is: H(s) = A·[A·s²+(√A/Q)·s+1] / [s²+(√A/Q)·s+A]
-/// where A = √G.
+/// Vicanek matched 2nd-order high shelf via tilt shelf proxy (ZL approach).
+///
+/// High shelf = tilt_shelf(g) with numerator scaled by √g.
+/// DC=1, Nyquist=g.
 fn high_shelf_2_matched_q(w0: f64, q: f64, g: f64) -> Coeffs {
-    let a = g.sqrt(); // A = √G (RBJ convention)
-    let sqrt_a = a.sqrt(); // √A = G^(1/4)
+    let c = tilt_shelf_2_matched(w0, q, g);
+    let scale = g.sqrt();
+    [c[0], c[1], c[2], c[3] * scale, c[4] * scale, c[5] * scale]
+}
 
-    // Map analog shelf denominator poles to digital via impulse invariance.
-    // Denominator: s² + (√A/Q)·ωc·s + A·ωc² = 0
-    // Standard form poles at s = ωc·(-b ± j·√(c²-b²))
-    // where b = √A/(2Q), c = √A
-    let (a1, a2) = solve_poles(w0, sqrt_a / (2.0 * q), sqrt_a);
+/// Vicanek matched 2nd-order tilt shelf with optimal matching frequencies.
+///
+/// For g > 1 (boost), works with 1/g and swaps numerator/denominator.
+/// Matching frequencies derived analytically from the analog prototype's
+/// error-minimizing points (Vicanek's quadratic).
+fn tilt_shelf_2_matched(w0: f64, q: f64, g: f64) -> Coeffs {
+    let reverse = g > 1.0;
+    let g = if reverse { 1.0 / g } else { g };
 
-    // Squared-magnitude parameters for denominator
-    let a0_big = (1.0 + a1 + a2).powi(2);
-    let a1_big = (1.0 - a1 + a2).powi(2);
-    let a2_big = -4.0 * a2;
-    let p0 = phi0(w0);
-    let p1 = phi1(w0);
+    let sqrt_g = g.sqrt();
+    let ssqrt_g = sqrt_g.sqrt(); // g^(1/4)
 
-    // DC: high shelf has |H(0)|² = 1
-    let b0_big = a0_big;
+    // Poles via impulse invariance (same as ZL's solve_a with 3 args)
+    let (a1, a2) = solve_poles(w0, ssqrt_g / (2.0 * q), ssqrt_g);
 
-    // Nyquist: compute from analog prototype
-    // |H(jf)|² = A²·[(1-A·f²)² + A·f²/Q²] / [(A-f²)² + A·f²/Q²]
-    let f_ny = PI / w0;
-    let f_ny_sq = f_ny * f_ny;
-    let a_f_ny_sq = a * f_ny_sq;
-    let a_over_q_sq = a * f_ny_sq / (q * q);
-    let num_ny = (1.0 - a_f_ny_sq).powi(2) + a_over_q_sq;
-    let den_ny = (a - f_ny_sq).powi(2) + a_over_q_sq;
-    let h_ny_sq = if den_ny.abs() > 1e-30 {
-        a * a * num_ny / den_ny
+    // Denominator squared-magnitude parameters: A = get_AB(a)
+    let a_big = [(1.0 + a1 + a2).powi(2), (1.0 - a1 + a2).powi(2), -4.0 * a2];
+
+    // Compute optimal matching frequencies from Vicanek's quadratic
+    let w02 = w0 * w0;
+    let c2 = sqrt_g * (-1.0 + 2.0 * q * q);
+    let c0 = c2 * w02 * w02;
+    let c1 = -2.0 * (1.0 + g) * (q * w0) * (q * w0);
+    let discriminant = c1 * c1 - 4.0 * c0 * c2;
+
+    let mut ws = if discriminant <= 0.0 {
+        [0.0, w0 * 0.5, w0]
     } else {
-        g // fallback to full gain
+        let delta = discriminant.sqrt();
+        let inv_2c2 = 0.5 / c2;
+        let sol1 = (-c1 + delta) * inv_2c2;
+        let sol2 = (-c1 - delta) * inv_2c2;
+        if sol1 < 0.0 || sol2 < 0.0 {
+            [0.0, w0 * 0.5, w0]
+        } else {
+            let w1 = sol1.sqrt();
+            let w2 = sol2.sqrt();
+            if w1 < PI || w2 < PI {
+                [0.0, w1.min(w2), w1.max(w2).min(PI)]
+            } else {
+                [0.0, PI / 2.0, PI]
+            }
+        }
     };
-    let b1_big = a1_big * h_ny_sq;
 
-    // Corner: |H(w0)|² = G (half-gain point in dB)
-    let target = g * (a0_big * p0 + a1_big * p1 + a2_big * 4.0 * p0 * p1);
-    let b2_big = (target - b0_big * p0 - b1_big * p1) / (4.0 * p0 * p1);
+    // Tilt shelf analog magnitude squared: H(s) = N(s)/D(s) where
+    //   N(s) = sqrt_g·s² + ssqrt_g·w0/q·s + w0²
+    //   D(s) = s² + ssqrt_g·w0/q·s + sqrt_g·w0²
+    // |H(jw)|² = |N(jw)|²/|D(jw)|²
+    let w0_over_q = w0 / q;
+    let tilt_mag2 = |w: f64| -> f64 {
+        let w2 = w * w;
+        // N(jw) = (w0² - sqrt_g·w²) + j·(ssqrt_g·w0/q·w)
+        let nr = w02 - sqrt_g * w2;
+        let ni = ssqrt_g * w0_over_q * w;
+        // D(jw) = (sqrt_g·w0² - w²) + j·(ssqrt_g·w0/q·w)
+        let dr = sqrt_g * w02 - w2;
+        let di = ssqrt_g * w0_over_q * w;
+        let num_sq = nr * nr + ni * ni;
+        let den_sq = dr * dr + di * di;
+        if den_sq < 1e-30 {
+            return 1.0;
+        }
+        num_sq / den_sq
+    };
 
-    let (b0, b1, b2) = mag_sq_to_b([b0_big.max(0.0), b1_big.max(0.0), b2_big]);
-    [1.0, a1, a2, b0, b1, b2]
+    // Retry loop matches ZL: B starts invalid, first solve uses original ws
+    let _ws = ws;
+    let mut b_big = [-1.0, -1.0, -1.0_f64];
+    let mut trial = 0;
+    while !check_b_valid(&b_big) && trial < 20 {
+        trial += 1;
+        let mut phi = [[0.0; 3]; 3];
+        let mut rhs = [0.0; 3];
+        for i in 0..3 {
+            let p = phi_vec(ws[i]);
+            phi[i] = p;
+            rhs[i] = tilt_mag2(ws[i]) * dot3(&p, &a_big);
+        }
+        b_big = linear_solve_3x3(&phi, &rhs);
+        ws[2] = 0.5 * (ws[2] + PI);
+    }
+    // Fallback if still invalid after 20 trials: revert to original ws
+    if trial == 20 {
+        let ws_fallback = _ws;
+        let mut phi = [[0.0; 3]; 3];
+        let mut rhs = [0.0; 3];
+        for i in 0..3 {
+            let p = phi_vec(ws_fallback[i]);
+            phi[i] = p;
+            rhs[i] = tilt_mag2(ws_fallback[i]) * dot3(&p, &a_big);
+        }
+        b_big = linear_solve_3x3(&phi, &rhs);
+    }
+
+    let (b0, b1, b2) = mag_sq_to_b([b_big[0].max(0.0), b_big[1].max(0.0), b_big[2]]);
+
+    if reverse {
+        [b0, b1, b2, 1.0, a1, a2]
+    } else {
+        [1.0, a1, a2, b0, b1, b2]
+    }
+}
+
+fn phi_vec(w: f64) -> [f64; 3] {
+    let c = 0.5 * w.cos();
+    let p0 = 0.5 + c;
+    let p1 = 0.5 - c;
+    [p0, p1, 4.0 * p0 * p1]
+}
+
+fn dot3(a: &[f64; 3], b: &[f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn check_b_valid(b: &[f64; 3]) -> bool {
+    b[0] > 0.0 && b[1] > 0.0 && (0.5 * (b[0].sqrt() + b[1].sqrt())).powi(2) + b[2] > 0.0
+}
+
+/// Solve 3×3 system exploiting phi(0)=[1,0,0] structure.
+fn linear_solve_3x3(a: &[[f64; 3]; 3], b: &[f64; 3]) -> [f64; 3] {
+    if a[0][0].abs() > a[0][1].abs() {
+        let x0 = b[0] / a[0][0];
+        let denom = -(a[1][2] * a[2][1] - a[1][1] * a[2][2]);
+        if denom.abs() < 1e-30 {
+            return [-1.0; 3];
+        }
+        let x1 = (a[2][2] * b[1] - a[1][2] * b[2] + a[1][2] * a[2][0] * x0
+            - a[1][0] * a[2][2] * x0)
+            / denom;
+        let x2 = (-a[2][1] * b[1] + a[1][1] * b[2] - a[1][1] * a[2][0] * x0
+            + a[1][0] * a[2][1] * x0)
+            / denom;
+        [x0, x1, x2]
+    } else {
+        let x1 = b[0] / a[0][1];
+        let denom = -(a[1][2] * a[2][0] - a[1][0] * a[2][2]);
+        if denom.abs() < 1e-30 {
+            return [-1.0; 3];
+        }
+        let x0 = (a[1][2] * a[2][1] * b[0] - a[1][1] * a[2][2] * b[0] + a[2][2] * b[1]
+            - a[1][2] * b[2])
+            / denom;
+        let x2 = (a[1][1] * a[2][0] * b[0] - a[1][0] * a[2][1] * b[0] - a[2][0] * b[1]
+            + a[1][0] * b[2])
+            / denom;
+        [x0, x1, x2]
+    }
 }
 
 #[cfg(test)]

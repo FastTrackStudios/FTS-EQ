@@ -221,12 +221,12 @@ impl Band {
         let q_user = self.q * std::f64::consts::SQRT_2;
 
         // Gain distribution between 1st-order and biquad sections.
-        // For order=3 (1st-order + single biquad), put only 20% gain in the
-        // 1st-order section. Its Vicanek matched design cramps at Nyquist,
-        // while the biquad's II-pole + mag-matched approach handles high
-        // frequencies much better.
+        // For order=3 (1st-order + single biquad), minimize the 1st-order
+        // contribution. Its Vicanek matched design has a fundamental ~0.06 dB
+        // error floor, while the biquad's impulse-invariance poles +
+        // magnitude matching handles the full frequency range much better.
         let (gain_1st, gain_2nd) = if order == 3 {
-            (effective_gain_db * 0.20, effective_gain_db * 0.80)
+            (effective_gain_db * 0.05, effective_gain_db * 0.95)
         } else {
             let gain_per_pole = effective_gain_db / order as f64;
             (gain_per_pole, gain_per_pole * 2.0)
@@ -256,7 +256,12 @@ impl Band {
             let is_last = i == num_biquads - 1;
             let is_second_last = i == num_biquads.saturating_sub(2) && num_biquads > 1;
             let bw_q = butterworth_q(num_2nd, i);
-            let q_section = if is_last {
+            let q_section = if num_biquads == 1 {
+                // Single biquad (order=3): apply shelf Q compression.
+                // Shelf resonance Q follows √(q_display) scaling, giving
+                // q_internal = √(q_display) / √2 = √(self.q * √2) / √2.
+                (self.q * std::f64::consts::SQRT_2).sqrt() * std::f64::consts::FRAC_1_SQRT_2
+            } else if is_last {
                 let blend = (1.0 - (order as f64 - 3.0) / 10.0).clamp(0.5, 1.0);
                 let scale = if q_user > 1.0 {
                     1.0 + (q_user.ln() * 1.03 * blend)
