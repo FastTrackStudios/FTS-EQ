@@ -10,11 +10,10 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use eq_dsp::filter_type::{FilterStructure, FilterType};
-use eq_dsp::oversample::EqOversampler;
 use eq_dsp::EqChain;
 use fts_dsp::{AudioConfig, Processor};
 
-mod editor;
+pub mod editor;
 
 // ── Constants ───────────────────────────────────────────────────────
 
@@ -43,7 +42,7 @@ pub struct EqUiState {
 }
 
 impl EqUiState {
-    fn new(params: Arc<FtsEqParams>) -> Self {
+    pub fn new(params: Arc<FtsEqParams>) -> Self {
         Self {
             params,
             input_peak_db: AtomicF32::new(-100.0),
@@ -240,15 +239,11 @@ impl Default for FtsEqParams {
 
 // ── Plugin ──────────────────────────────────────────────────────────
 
-/// Internal oversampling factor — Pro-Q 4 runs at 4× internally.
-const OVERSAMPLE_RATIO: usize = 4;
-
 struct FtsEq {
     params: Arc<FtsEqParams>,
     ui_state: Arc<EqUiState>,
     editor_state: Arc<DioxusState>,
     chain: EqChain,
-    oversampler: EqOversampler,
     sample_rate: f64,
     // Scratch buffers for f64 block processing
     left_buf: Vec<f64>,
@@ -280,7 +275,6 @@ impl Default for FtsEq {
             ui_state,
             editor_state: DioxusState::new(|| (1000, 600)),
             chain,
-            oversampler: EqOversampler::new(),
             sample_rate: 48000.0,
             left_buf: Vec::new(),
             right_buf: Vec::new(),
@@ -508,11 +502,9 @@ impl Plugin for FtsEq {
             .sample_rate
             .store(buffer_config.sample_rate, Ordering::Relaxed);
 
-        // EQ chain runs at oversampled rate for Pro-Q 4 parity
-        let os_rate = self.sample_rate * OVERSAMPLE_RATIO as f64;
         self.chain.update(AudioConfig {
-            sample_rate: os_rate,
-            max_buffer_size: buffer_config.max_buffer_size as usize * OVERSAMPLE_RATIO,
+            sample_rate: self.sample_rate,
+            max_buffer_size: buffer_config.max_buffer_size as usize,
         });
 
         // Pre-allocate scratch buffers
@@ -525,7 +517,6 @@ impl Plugin for FtsEq {
 
     fn reset(&mut self) {
         self.chain.reset();
-        self.oversampler.reset();
     }
 
     fn process(
@@ -553,15 +544,9 @@ impl Plugin for FtsEq {
             self.right_buf[i] = r;
         }
 
-        // Process EQ chain through oversampler (4× internal rate)
-        let chain = &mut self.chain;
-        self.oversampler.process_stereo(
-            &mut self.left_buf[..n],
-            &mut self.right_buf[..n],
-            |l, r| {
-                chain.process(l, r);
-            },
-        );
+        // Process EQ chain at native rate
+        self.chain
+            .process(&mut self.left_buf[..n], &mut self.right_buf[..n]);
 
         // Write back to f32 buffer, apply output gain, metering + FFT
         let mut output_peak: f32 = 0.0;
