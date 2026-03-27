@@ -4,6 +4,7 @@
 //! frequency response visualization with draggable band nodes.
 
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use audio_gui::prelude::{use_init_theme, DragProvider, LevelMeterDb};
 use audio_gui::viz::eq_graph::{get_band_color, EqBand, EqBandShape, EqGraph};
@@ -105,6 +106,21 @@ pub fn App() -> Element {
     // Count active bands
     let active_count = bands_signal.read().iter().filter(|b| b.used).count();
 
+    // Get window dimensions for overlay positioning
+    let dioxus_state = use_context::<Arc<DioxusState>>();
+    let (win_w, win_h) = dioxus_state.size();
+    let win_w = win_w as f64;
+    let win_h = win_h as f64;
+    // Layout constants (CSS pixels): header ~37px, bottom bar ~61px, graph margin 4px/6px
+    let header_h = 37.0;
+    let bottom_h = 61.0;
+    let margin_x = 6.0;
+    let margin_y = 4.0;
+    let graph_x = margin_x;
+    let graph_y = header_h + margin_y;
+    let graph_w = (win_w - margin_x * 2.0).max(1.0);
+    let graph_h = (win_h - header_h - bottom_h - margin_y * 2.0).max(1.0);
+
     let base_css = t.base_css();
     let root_style = t.root_style();
     let spacing_root = t.spacing_root;
@@ -166,13 +182,12 @@ pub fn App() -> Element {
                     sample_rate: sample_rate,
                     spectrum_db: spectrum,
                     focused_band_out: focused_band,
-                    // Blitz element_coordinates() returns element-relative
-                    // coords (confirmed by debug: elem==client for the SVG).
-                    // rendered_width/height = actual pixel size of the SVG element.
-                    rendered_width: 1000.0,
-                    rendered_height: 511.0,
-                    offset_x: 0.0,
-                    offset_y: 0.0,
+                    // Dynamic layout — computed from window dimensions for full resizability.
+                    // The vello SceneOverlay paints at these coordinates in window space.
+                    rendered_width: graph_w,
+                    rendered_height: graph_h,
+                    offset_x: graph_x,
+                    offset_y: graph_y,
 
                     on_band_change: {
                         let ctx = ctx.clone();
