@@ -157,17 +157,15 @@ impl Band {
             section_idx += 1;
         }
 
-        // Butterworth Q cascade with user-scaled Q on the last section (resonance).
-        // At display Q=1.0 (self.q = 1/√2), the filter should be true Butterworth.
-        // Scale the last biquad's Butterworth Q by the user's display Q factor.
+        // Butterworth Q cascade with user-scaled Q on the resonant section.
+        // butterworth_q_for_order gives the highest Q at i=0 (pole pair farthest from
+        // the real axis, nearest the imaginary axis). This is the section responsible
+        // for the resonance peak near fc, so user Q must scale section i=0.
+        // At display Q=1.0 (self.q = 1/√2), the filter is true Butterworth.
         let num_biquads = num_2nd.min(self.num_sections - section_idx);
         for i in 0..num_biquads {
             let bw_q = butterworth_q_for_order(order, i);
-            let q_section = if i == num_biquads - 1 {
-                bw_q * self.q * SQRT_2
-            } else {
-                bw_q
-            };
+            let q_section = if i == 0 { bw_q * self.q * SQRT_2 } else { bw_q };
             let c = coeff::calculate(
                 self.filter_type,
                 self.freq_hz,
