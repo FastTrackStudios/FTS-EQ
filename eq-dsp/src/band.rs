@@ -27,6 +27,9 @@ pub struct Band {
     pub q: f64,
     pub order: usize, // 1, 2, 4, 6, 8, 10, 12
     pub enabled: bool,
+    /// Tuning: peak cascade Q compensation fraction (0.0–1.0).
+    /// Fraction of theoretical bandwidth narrowing correction applied.
+    pub peak_q_comp: f64,
 
     // Processing state — one of these is active
     tdf2: [Tdf2Section; MAX_SECTIONS],
@@ -35,6 +38,13 @@ pub struct Band {
     /// Output gain multiplier for filter types that use gain as output level
     /// (lowpass, highpass, bandpass, notch, allpass).
     output_gain: f64,
+    /// Parallel bell gain scale: non-zero enables the parallel bell topology.
+    ///
+    /// For higher-order bells: y[n] = x[n] + parallel_bell_gain * bp_cascade[n]
+    /// where bp_cascade is `num_sections` BP biquads applied in series.
+    /// This implements H_bell = 1 + (G_linear - 1) * H_BP, matching Pro-Q 4's
+    /// flat-top bell shape (vs cascaded peak biquads which over-estimate skirt gain).
+    parallel_bell_gain: f64,
 }
 
 impl Band {
@@ -47,10 +57,12 @@ impl Band {
             q: 0.707,
             order: 2,
             enabled: true,
+            peak_q_comp: 0.105,
             tdf2: std::array::from_fn(|_| Tdf2Section::new()),
             svf: std::array::from_fn(|_| SvfSection::new()),
             num_sections: 1,
             output_gain: 1.0,
+            parallel_bell_gain: 0.0,
         }
     }
 
@@ -62,8 +74,9 @@ impl Band {
 
         let order = self.order.clamp(0, MAX_ORDER);
 
-        // Reset output gain (filter types that need it will set it)
+        // Reset per-update state
         self.output_gain = 1.0;
+        self.parallel_bell_gain = 0.0;
 
         // Pro-Q 4 applies gain as flat output for Notch and Bandpass
         // (filter is bypassed, only the gain level is applied).
@@ -197,10 +210,14 @@ impl Band {
 
         if order <= 2 {
             self.num_sections = 1;
+            // Shelf Q compression: Pro-Q 4's display Q maps to internal Q
+            // via √(q_display) scaling. self.q = q_display / √2, so
+            // q_compressed = √(self.q * √2) / √2 = √(q_display) / √2.
+            let q_shelf = (self.q * SQRT_2).sqrt() * std::f64::consts::FRAC_1_SQRT_2;
             let c = coeff::calculate(
                 self.filter_type,
                 self.freq_hz,
-                self.q,
+                q_shelf,
                 effective_gain_db,
                 config.sample_rate,
             );
@@ -309,29 +326,19 @@ impl Band {
             return;
         }
 
-        // Higher-order peak: cascade multiple 2nd-order peak sections
-        // with gain distributed across sections.
-        let num = order / 2;
-        self.num_sections = num.min(MAX_SECTIONS);
+        // Higher-order bell: cascade of identical peak biquads with Q compensation.
+        // Each biquad shares the gain equally (gain_db / n_sections per section).
+        let n = order / 2;
+        self.num_sections = n.min(MAX_SECTIONS);
 
-        let g = 10.0_f64.powf(self.gain_db / 20.0);
-        let g_per = g.powf(1.0 / num as f64);
-        let gain_per = 20.0 * g_per.log10();
-
-        // Mild Q compensation for cascade bandwidth narrowing.
-        // Cascading N identical peaks narrows bandwidth by √(2^(1/N)−1).
-        // Apply 15% of theoretical correction to approximate Pro-Q 4's
-        // wider response without breaking the overall shape.
-        let n = self.num_sections as f64;
-        let full_comp = 1.0 / (2.0_f64.powf(1.0 / n) - 1.0).sqrt();
-        let q_adjusted = self.q * (1.0 + 0.15 * (full_comp - 1.0));
+        let gain_per_section = self.gain_db / self.num_sections as f64;
 
         for i in 0..self.num_sections {
             let c = coeff::calculate(
                 FilterType::Peak,
                 self.freq_hz,
-                q_adjusted,
-                gain_per,
+                self.q,
+                gain_per_section,
                 config.sample_rate,
             );
             self.set_section_coeffs(i, c);
@@ -620,24 +627,44 @@ impl Band {
 
     /// Process a single sample through all cascaded sections.
     #[inline]
-    pub fn tick(&mut self, mut sample: f64, ch: usize) -> f64 {
+    pub fn tick(&mut self, sample: f64, ch: usize) -> f64 {
         if !self.enabled {
             return sample;
         }
 
+        if self.parallel_bell_gain != 0.0 {
+            // Parallel bell: y = x + (G - 1) * BP_cascade(x)
+            // The BP biquads are stored in the sections array.
+            let mut bp = sample;
+            match self.structure {
+                FilterStructure::Tdf2 => {
+                    for i in 0..self.num_sections {
+                        bp = self.tdf2[i].tick(bp, ch);
+                    }
+                }
+                FilterStructure::Svf => {
+                    for i in 0..self.num_sections {
+                        bp = self.svf[i].tick(bp, ch);
+                    }
+                }
+            }
+            return sample + self.parallel_bell_gain * bp;
+        }
+
+        let mut out = sample;
         match self.structure {
             FilterStructure::Tdf2 => {
                 for i in 0..self.num_sections {
-                    sample = self.tdf2[i].tick(sample, ch);
+                    out = self.tdf2[i].tick(out, ch);
                 }
             }
             FilterStructure::Svf => {
                 for i in 0..self.num_sections {
-                    sample = self.svf[i].tick(sample, ch);
+                    out = self.svf[i].tick(out, ch);
                 }
             }
         }
-        sample * self.output_gain
+        out * self.output_gain
     }
 
     // r[impl dsp.biquad.reset]

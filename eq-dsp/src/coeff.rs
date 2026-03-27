@@ -116,13 +116,17 @@ fn lowpass_2(w0: f64, q: f64) -> Coeffs {
 }
 
 fn highpass_2(w0: f64, q: f64) -> Coeffs {
-    // Hybrid: Vicanek impulse-invariance poles (good passband, no cramping)
-    // + exact zeros at z=1 (deep DC stopband).
+    // Vicanek impulse-invariance poles + exact zeros at z=1 (DC zero).
+    // Normalized to the analog HP value at Nyquist (rather than unity),
+    // matching Pro-Q 4's passband level, which follows the analog prototype.
     let (a1, a2) = solve_poles(w0, 0.5 / q, 1.0);
-    // Numerator: proportional to (1 - z^-1)^2 = 1 - 2z^-1 + z^-2
-    // Scale for unity Nyquist gain: H(-1) = (b0-b1+b2)/(1-a1+a2) = 1
     let nyq_den = 1.0 - a1 + a2;
-    let scale = nyq_den / 4.0; // (1-(-2)+1) = 4
+    // Analog HP magnitude at digital Nyquist (Ω = π/w0)
+    let r = PI / w0;
+    let r2 = r * r;
+    let nyq_hp_mag_sq = r2 * r2 / ((1.0 - r2).powi(2) + r2 / (q * q));
+    let nyq_target = nyq_hp_mag_sq.max(0.0).sqrt();
+    let scale = nyq_den * nyq_target / 4.0; // H(-1) = nyq_target
     [1.0, a1, a2, scale, -2.0 * scale, scale]
 }
 

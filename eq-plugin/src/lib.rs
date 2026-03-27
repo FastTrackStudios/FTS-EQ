@@ -129,7 +129,7 @@ impl BandParams {
                 1000.0,
                 FloatRange::Skewed {
                     min: 20.0,
-                    max: 20000.0,
+                    max: 30000.0,
                     factor: FloatRange::skew_factor(-2.0),
                 },
             )
@@ -166,18 +166,18 @@ impl BandParams {
 
             slope: IntParam::new(
                 &format!("B{} Slope", idx + 1),
-                2, // 18 dB/oct default (matches Pro-Q 4 default of index 2)
+                2, // 12 dB/oct default (matches Pro-Q 4 default of index 2)
                 IntRange::Linear { min: 0, max: 10 },
             )
             .with_value_to_string(Arc::new(|v| match v {
-                0 => "6 dB/oct".to_string(),
-                1 => "12 dB/oct".to_string(),
-                2 => "18 dB/oct".to_string(),
-                3 => "24 dB/oct".to_string(),
-                4 => "30 dB/oct".to_string(),
-                5 => "36 dB/oct".to_string(),
-                6 => "48 dB/oct".to_string(),
-                7 => "60 dB/oct".to_string(),
+                0 => "0 dB/oct".to_string(),
+                1 => "6 dB/oct".to_string(),
+                2 => "12 dB/oct".to_string(),
+                3 => "18 dB/oct".to_string(),
+                4 => "24 dB/oct".to_string(),
+                5 => "30 dB/oct".to_string(),
+                6 => "36 dB/oct".to_string(),
+                7 => "48 dB/oct".to_string(),
                 8 => "72 dB/oct".to_string(),
                 9 => "96 dB/oct".to_string(),
                 10 => "Brickwall".to_string(),
@@ -333,18 +333,18 @@ impl Default for FtsEq {
 }
 
 /// Map slope index (0–10) to filter order for eq-dsp.
-/// Pro-Q 4 slopes: 6,12,18,24,30,36,48,60,72,96 dB/oct + Brickwall.
+/// Pro-Q 4 slopes: 0,6,12,18,24,30,36,48,72,96 dB/oct + Brickwall.
 /// Each 6 dB/oct = 1 pole (order 1).
 fn slope_to_order(slope: i32) -> usize {
     match slope {
-        0 => 1,   // 6 dB/oct
-        1 => 2,   // 12 dB/oct
-        2 => 3,   // 18 dB/oct
-        3 => 4,   // 24 dB/oct
-        4 => 5,   // 30 dB/oct
-        5 => 6,   // 36 dB/oct
-        6 => 8,   // 48 dB/oct (Pro-Q 4 skips 42)
-        7 => 10,  // 60 dB/oct
+        0 => 2,   // 0 dB/oct (Pro-Q 4 treats same as 12 dB/oct for bell/shelf)
+        1 => 1,   // 6 dB/oct
+        2 => 2,   // 12 dB/oct
+        3 => 3,   // 18 dB/oct
+        4 => 4,   // 24 dB/oct
+        5 => 5,   // 30 dB/oct
+        6 => 6,   // 36 dB/oct
+        7 => 8,   // 48 dB/oct
         8 => 12,  // 72 dB/oct
         9 => 16,  // 96 dB/oct (clamped to MAX_ORDER in DSP)
         10 => 16, // Brickwall (max we can do)
@@ -414,11 +414,19 @@ impl FtsEq {
                 let gain = bp.gain_db.value() as f64 * scale;
                 // Pro-Q 4 convention: display Q=1.0 = Butterworth (filter Q = 1/√2).
                 let q = bp.q.value() as f64 * std::f64::consts::FRAC_1_SQRT_2;
+                let slope_val = bp.slope.value();
                 let order = match ft {
                     FilterType::Lowpass | FilterType::Highpass | FilterType::Bandpass => {
-                        lp_hp_slope_to_order(bp.slope.value())
+                        lp_hp_slope_to_order(slope_val)
                     }
-                    _ => slope_to_order(bp.slope.value()),
+                    // For shelves, slope 0 (0 dB/oct) = 1st-order.
+                    // For bell, slope 0 = same as slope 2 (12 dB/oct, order 2).
+                    FilterType::LowShelf | FilterType::HighShelf | FilterType::TiltShelf
+                        if slope_val == 0 =>
+                    {
+                        1
+                    }
+                    _ => slope_to_order(slope_val),
                 };
 
                 let peak_q_comp = self.params.tune_peak_q_comp.value() as f64;
