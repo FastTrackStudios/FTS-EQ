@@ -254,6 +254,7 @@ impl Band {
         let num_biquads = num_2nd.min(self.num_sections - section_idx);
         for i in 0..num_biquads {
             let is_last = i == num_biquads - 1;
+            let is_second_last = i == num_biquads.saturating_sub(2) && num_biquads > 1;
             let bw_q = butterworth_q(num_2nd, i);
             let q_section = if is_last {
                 let blend = (1.0 - (order as f64 - 3.0) / 10.0).clamp(0.5, 1.0);
@@ -261,6 +262,17 @@ impl Band {
                     1.0 + (q_user.ln() * 1.03 * blend)
                 } else {
                     q_user.powf(blend * 0.75)
+                };
+                bw_q * scale
+            } else if is_second_last && order >= 6 {
+                // For high-order cascades, spread some Q influence to the
+                // second-to-last section to reduce extreme resonance
+                // concentration on the last section.
+                let blend = (1.0 - (order as f64 - 3.0) / 10.0).clamp(0.5, 1.0);
+                let scale = if q_user > 1.0 {
+                    1.0 + (q_user.ln() * 0.3 * blend)
+                } else {
+                    1.0
                 };
                 bw_q * scale
             } else {
