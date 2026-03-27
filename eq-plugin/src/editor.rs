@@ -93,7 +93,7 @@ pub fn App() -> Element {
             gain: bp.gain_db.value() * gain_scale,
             q: bp.q.value(),
             shape: int_to_shape(bp.filter_type.value()),
-            solo: false,
+            solo: bp.solo.value() > 0.5,
             stereo_mode: Default::default(),
         });
     }
@@ -219,6 +219,15 @@ pub fn App() -> Element {
                                     bp.enabled.preview_normalized(enabled_val),
                                 );
                                 ctx.end_set_raw(bp.enabled.as_ptr());
+
+                                // Update solo state
+                                let solo_val = if band.solo { 1.0_f32 } else { 0.0 };
+                                ctx.begin_set_raw(bp.solo.as_ptr());
+                                ctx.set_normalized_raw(
+                                    bp.solo.as_ptr(),
+                                    bp.solo.preview_normalized(solo_val),
+                                );
+                                ctx.end_set_raw(bp.solo.as_ptr());
                             }
                         }
                     },
