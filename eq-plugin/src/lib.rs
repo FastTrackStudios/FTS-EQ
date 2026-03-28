@@ -352,11 +352,10 @@ fn slope_to_order(slope: i32) -> usize {
     }
 }
 
-/// LP/HP slope mapping — different from other filter types in Pro-Q 4.
+/// LP/HP slope mapping for high_cut and low_cut filters.
 ///
-/// For LP/HP, slope 0 = bypass, slope N = order N (for N=1..6),
-/// then jumps to 48/72/96/brickwall at higher indices.
-/// Verified against Pro-Q 4 reference data at slopes 0, 2, 5, 8.
+/// Differs from slope_to_order: slope 0 = bypass (order 0), and the
+/// higher slopes use even orders (48, 60, 72 dB/oct = 8, 10, 12 poles).
 fn lp_hp_slope_to_order(slope: i32) -> usize {
     match slope {
         0 => 0,   // bypass
@@ -365,8 +364,8 @@ fn lp_hp_slope_to_order(slope: i32) -> usize {
         3 => 3,   // 18 dB/oct
         4 => 4,   // 24 dB/oct
         5 => 5,   // 30 dB/oct
-        6 => 6,   // 36 dB/oct
-        7 => 8,   // 48 dB/oct
+        6 => 8,   // 48 dB/oct
+        7 => 10,  // 60 dB/oct
         8 => 12,  // 72 dB/oct
         9 => 16,  // 96 dB/oct
         10 => 16, // Brickwall

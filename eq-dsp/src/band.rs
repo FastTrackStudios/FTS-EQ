@@ -148,9 +148,11 @@ impl Band {
         let mut section_idx = 0;
 
         if has_first_order && section_idx < self.num_sections {
+            // Use matched 1st-order to avoid the bilinear LP zero at Nyquist /
+            // HP zero at DC that causes 40-60 dB excess attenuation in odd-order cascades.
             let c = match self.filter_type {
-                FilterType::Lowpass => coeff::lowpass_1(self.freq_hz, config.sample_rate),
-                FilterType::Highpass => coeff::highpass_1(self.freq_hz, config.sample_rate),
+                FilterType::Lowpass => coeff::lowpass_1_matched(self.freq_hz, config.sample_rate),
+                FilterType::Highpass => coeff::highpass_1_matched(self.freq_hz, config.sample_rate),
                 _ => unreachable!(),
             };
             self.set_section_coeffs(section_idx, c);

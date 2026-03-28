@@ -119,6 +119,13 @@ fn highpass_2(w0: f64, q: f64) -> Coeffs {
     // Vicanek impulse-invariance poles + exact zeros at z=1 (DC zero).
     // Normalized to the analog HP value at Nyquist (rather than unity),
     // matching Pro-Q 4's passband level, which follows the analog prototype.
+    //
+    // NOTE: corner matching (analogous to lowpass_2's Q² constraint) is not
+    // applied here. Adding it via the mag_sq_to_b path with b0_big=0 places
+    // numerator zeros slightly off z=1, creating non-minimum-phase zeros that
+    // produce hundreds-of-samples group delay spikes near DC. Exact zeros at
+    // z=1 require the [scale, -2*scale, scale] numerator form, which only
+    // leaves one free parameter (scale) — not enough for three constraints.
     let (a1, a2) = solve_poles(w0, 0.5 / q, 1.0);
     let nyq_den = 1.0 - a1 + a2;
     // Analog HP magnitude at digital Nyquist (Ω = π/w0)
@@ -255,6 +262,45 @@ pub fn highpass_1(freq_hz: f64, sample_rate: f64) -> Coeffs {
     let b0 = a0_inv;
     let b1 = -b0;
     let a1 = (wc - 1.0) * a0_inv;
+    [1.0, a1, 0.0, b0, b1, 0.0]
+}
+
+/// Matched 1st-order lowpass using matched-Z pole placement.
+///
+/// The standard bilinear `lowpass_1` has an exact zero at Nyquist (z = -1),
+/// causing the gain to approach 0 far faster than the analog prototype near
+/// Nyquist. For odd-order cascade LP filters (order 3, 5, 7…) this produces
+/// 40–60 dB excess attenuation at near-Nyquist frequencies.
+///
+/// This variant uses a matched-Z pole and enforces:
+///   DC gain   = 1
+///   Nyquist gain = analog 1st-order LP value = 1/√(1 + (nyq/fc)²)
+/// so the cascade matches the analog Butterworth prototype near Nyquist.
+pub fn lowpass_1_matched(freq_hz: f64, sample_rate: f64) -> Coeffs {
+    let nyq = sample_rate / 2.0;
+    // Matched-Z pole: map analog pole at s = -2π·fc to z = exp(-2π·fc/fs)
+    let a1 = -((-2.0 * PI * freq_hz / sample_rate).exp());
+    // Analog LP Nyquist gain
+    let n = 1.0 / (1.0 + (nyq / freq_hz).powi(2)).sqrt();
+    // Solve DC = 1, Nyquist = n for b0, b1
+    let b0 = ((1.0 + n) + a1 * (1.0 - n)) / 2.0;
+    let b1 = ((1.0 - n) + a1 * (1.0 + n)) / 2.0;
+    [1.0, a1, 0.0, b0, b1, 0.0]
+}
+
+/// Matched 1st-order highpass using matched-Z pole placement.
+///
+/// Symmetric to `lowpass_1_matched`: enforces DC = 0 and Nyquist = analog
+/// HP value = 1/√(1 + (fc/nyq)²), preventing near-DC over-attenuation in
+/// odd-order HP cascades.
+pub fn highpass_1_matched(freq_hz: f64, sample_rate: f64) -> Coeffs {
+    let nyq = sample_rate / 2.0;
+    let a1 = -((-2.0 * PI * freq_hz / sample_rate).exp());
+    // Analog HP Nyquist gain = 1/√(1 + (fc/nyq)²)
+    let n = 1.0 / (1.0 + (freq_hz / nyq).powi(2)).sqrt();
+    // DC = 0 → b1 = -b0; Nyquist = n → b0 = n·(1 - a1)/2
+    let b0 = n * (1.0 - a1) / 2.0;
+    let b1 = -b0;
     [1.0, a1, 0.0, b0, b1, 0.0]
 }
 
