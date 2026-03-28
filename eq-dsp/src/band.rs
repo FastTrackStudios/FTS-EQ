@@ -439,8 +439,8 @@ impl Band {
 
         // Increase Q per section to compensate for cascade bandwidth expansion.
         // Cascading N identical notch sections widens the -3dB bandwidth;
-        // scaling Q by N^0.3 approximately preserves the apparent bandwidth.
-        let q_compensated = self.q * (self.num_sections as f64).powf(0.3);
+        // scaling Q by N^0.1 approximately preserves the apparent bandwidth.
+        let q_compensated = self.q * (self.num_sections as f64).powf(0.1);
 
         for i in 0..self.num_sections {
             let c = coeff::calculate(
