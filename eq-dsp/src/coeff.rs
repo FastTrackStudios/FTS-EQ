@@ -117,23 +117,29 @@ fn lowpass_2(w0: f64, q: f64) -> Coeffs {
 
 fn highpass_2(w0: f64, q: f64) -> Coeffs {
     // Vicanek impulse-invariance poles + exact zeros at z=1 (DC zero).
-    // Normalized to the analog HP value at Nyquist (rather than unity),
-    // matching Pro-Q 4's passband level, which follows the analog prototype.
-    //
-    // NOTE: corner matching (analogous to lowpass_2's Q² constraint) is not
-    // applied here. Adding it via the mag_sq_to_b path with b0_big=0 places
-    // numerator zeros slightly off z=1, creating non-minimum-phase zeros that
-    // produce hundreds-of-samples group delay spikes near DC. Exact zeros at
-    // z=1 require the [scale, -2*scale, scale] numerator form, which only
-    // leaves one free parameter (scale) — not enough for three constraints.
+    // Scale is set by matching |H(w0)| = Q (analog corner gain) rather than
+    // Nyquist. With the [scale, -2*scale, scale] form, only one free parameter
+    // (scale) exists after DC=0 is built in. Corner matching gives correct Q
+    // resonance, which dominates perceptual accuracy especially at high Q.
     let (a1, a2) = solve_poles(w0, 0.5 / q, 1.0);
-    let nyq_den = 1.0 - a1 + a2;
-    // Analog HP magnitude at digital Nyquist (Ω = π/w0)
-    let r = PI / w0;
-    let r2 = r * r;
-    let nyq_hp_mag_sq = r2 * r2 / ((1.0 - r2).powi(2) + r2 / (q * q));
-    let nyq_target = nyq_hp_mag_sq.max(0.0).sqrt();
-    let scale = nyq_den * nyq_target / 4.0; // H(-1) = nyq_target
+
+    // |H(w0)| = scale * |N(e^{jw0})| / |D(e^{jw0})| = Q
+    let cw = w0.cos();
+    let sw = w0.sin();
+    let c2w = 2.0 * cw * cw - 1.0;
+    let s2w = 2.0 * sw * cw;
+
+    // Numerator at w0: scale * (1 - 2*e^{-jw0} + e^{-2jw0})
+    let num_re = 1.0 - 2.0 * cw + c2w;
+    let num_im = 2.0 * sw - s2w;
+    let num_mag = (num_re * num_re + num_im * num_im).sqrt();
+
+    // Denominator at w0: (1 + a1*e^{-jw0} + a2*e^{-2jw0})
+    let den_re = 1.0 + a1 * cw + a2 * c2w;
+    let den_im = -a1 * sw - a2 * s2w;
+    let den_mag = (den_re * den_re + den_im * den_im).sqrt();
+
+    let scale = q * den_mag / num_mag.max(1e-30);
     [1.0, a1, a2, scale, -2.0 * scale, scale]
 }
 
