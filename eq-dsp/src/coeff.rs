@@ -205,10 +205,8 @@ fn notch_2(w0: f64, q: f64) -> Coeffs {
     [1.0, a1, a2, b0 * scale, b1 * scale, b2 * scale]
 }
 
-fn peak_2(w0: f64, q: f64, g: f64) -> Coeffs {
-    if (g - 1.0).abs() < 1e-6 {
-        return PASSTHROUGH;
-    }
+fn peak_2_boost(w0: f64, q: f64, g: f64) -> Coeffs {
+    debug_assert!(g >= 1.0);
     let pole_q = (g.sqrt() * q).max(0.01);
     let (a1, a2) = solve_poles(w0, 0.5 / pole_q, 1.0);
     let a0_big = (1.0 + a1 + a2) * (1.0 + a1 + a2);
@@ -224,6 +222,20 @@ fn peak_2(w0: f64, q: f64, g: f64) -> Coeffs {
     let b1_big = r2 + b0_big + 4.0 * (p1 - p0) * b2_big;
     let (b0, b1, b2) = mag_sq_to_b([b0_big, b1_big.max(0.0), b2_big]);
     [1.0, a1, a2, b0, b1, b2]
+}
+
+fn peak_2(w0: f64, q: f64, g: f64) -> Coeffs {
+    if (g - 1.0).abs() < 1e-6 {
+        return PASSTHROUGH;
+    }
+    if g < 1.0 {
+        // For cuts: H_cut = 1/H_boost(1/g) — invert the corresponding boost.
+        // This naturally produces a negative a2 (Nyquist-side correction pole)
+        // matching Pro-Q 4's biquad structure and gives better high-frequency accuracy.
+        let [_, a1b, a2b, b0b, b1b, b2b] = peak_2_boost(w0, q, 1.0 / g);
+        return [1.0, b1b / b0b, b2b / b0b, 1.0 / b0b, a1b / b0b, a2b / b0b];
+    }
+    peak_2_boost(w0, q, g)
 }
 
 fn tilt_shelf_2(w0: f64, q: f64, g: f64) -> Coeffs {
