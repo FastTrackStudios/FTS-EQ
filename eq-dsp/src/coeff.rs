@@ -36,6 +36,28 @@ pub fn calculate_cascade(
     sample_rate: f64,
     num_biquads: usize,
 ) -> Coeffs {
+    calculate_cascade_indexed(
+        filter_type,
+        freq_hz,
+        q,
+        gain_db,
+        sample_rate,
+        num_biquads,
+        0,
+    )
+}
+
+/// Calculate filter coefficients for a section within a cascade, with section index.
+/// `section_index` is the 0-based index of this section in the cascade.
+pub fn calculate_cascade_indexed(
+    filter_type: FilterType,
+    freq_hz: f64,
+    q: f64,
+    gain_db: f64,
+    sample_rate: f64,
+    num_biquads: usize,
+    section_index: usize,
+) -> Coeffs {
     let w0 = 2.0 * PI * freq_hz / sample_rate;
     let g = 10.0_f64.powf(gain_db / 20.0);
     let w0 = w0.clamp(1e-6, PI - 1e-6);
@@ -45,7 +67,7 @@ pub fn calculate_cascade(
         FilterType::LowShelf => low_shelf_2(w0, q, g),
         FilterType::HighShelf => high_shelf_2(w0, q, g),
         FilterType::TiltShelf => tilt_shelf_2(w0, q, g),
-        FilterType::Lowpass => lowpass_2(w0, q, num_biquads),
+        FilterType::Lowpass => lowpass_2(w0, q, num_biquads, section_index),
         FilterType::Highpass => highpass_2(w0, q, num_biquads),
         FilterType::Bandpass => bandpass_2(w0, q),
         FilterType::Notch => notch_2(w0, q),
@@ -99,7 +121,7 @@ fn mag_sq_to_b(big_b: [f64; 3]) -> (f64, f64, f64) {
 
 // ── RBJ cookbook filters ─────────────────────────────────────────────
 
-fn lowpass_2(w0: f64, q: f64, num_biquads: usize) -> Coeffs {
+fn lowpass_2(w0: f64, q: f64, num_biquads: usize, _section_index: usize) -> Coeffs {
     // Impulse-invariance poles with sigma correction for Nyquist accuracy.
     let sigma = 0.5 / q;
     let w_norm = w0 * std::f64::consts::FRAC_1_PI;
@@ -112,7 +134,15 @@ fn lowpass_2(w0: f64, q: f64, num_biquads: usize) -> Coeffs {
             let c = 0.982 * sigma.powf(0.529) * w_norm.powf(4.069);
             (c, 0.49)
         };
-        (sigma * (1.0 - c.min(cap)), 1.0)
+        // For cascade sections at high frequencies, boost Nyquist target to
+        // reduce compound stopband droop.
+        let ns = if num_biquads > 1 && w_norm > 0.4 {
+            let t = ((w_norm - 0.4) / 0.6).min(0.50);
+            1.0 + 0.90 * t * t * sigma
+        } else {
+            1.0
+        };
+        (sigma * (1.0 - c.min(cap)), ns)
     } else if w_norm > 0.5 {
         let correction = 0.17 * w_norm;
         (sigma * (1.0 + correction), 1.17)
@@ -122,7 +152,6 @@ fn lowpass_2(w0: f64, q: f64, num_biquads: usize) -> Coeffs {
 
     let (a1, a2) = solve_poles(w0, sigma_eff, 1.0);
 
-    // Vicanek 3-point numerator matching: DC=1, Nyquist=analog, corner=Q²
     let a0_big = (1.0 + a1 + a2).powi(2);
     let a1_big = (1.0 - a1 + a2).powi(2);
     let a2_big = -4.0 * a2;
@@ -630,7 +659,7 @@ mod tests {
 
     #[test]
     fn lowpass_has_unity_dc_gain() {
-        let c = lowpass_2(2.0 * PI * 1000.0 / 44100.0, 0.707, 1);
+        let c = lowpass_2(2.0 * PI * 1000.0 / 44100.0, 0.707, 1, 0);
         let dc = (c[3] + c[4] + c[5]) / (c[0] + c[1] + c[2]);
         assert!((dc - 1.0).abs() < 0.01, "DC gain = {dc}, expected ~1.0");
     }
