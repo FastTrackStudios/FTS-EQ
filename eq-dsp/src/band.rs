@@ -168,12 +168,13 @@ impl Band {
         for i in 0..num_biquads {
             let bw_q = butterworth_q_for_order(order, i);
             let q_section = if i == 0 { bw_q * self.q * SQRT_2 } else { bw_q };
-            let c = coeff::calculate(
+            let c = coeff::calculate_cascade(
                 self.filter_type,
                 self.freq_hz,
                 q_section,
                 0.0,
                 config.sample_rate,
+                num_biquads,
             );
             self.set_section_coeffs(section_idx, c);
             section_idx += 1;

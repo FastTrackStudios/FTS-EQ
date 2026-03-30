@@ -23,6 +23,19 @@ pub fn calculate(
     gain_db: f64,
     sample_rate: f64,
 ) -> Coeffs {
+    calculate_cascade(filter_type, freq_hz, q, gain_db, sample_rate, 1)
+}
+
+/// Calculate filter coefficients for a section within a cascade.
+/// `num_biquads` is the total number of 2nd-order sections in the cascade.
+pub fn calculate_cascade(
+    filter_type: FilterType,
+    freq_hz: f64,
+    q: f64,
+    gain_db: f64,
+    sample_rate: f64,
+    num_biquads: usize,
+) -> Coeffs {
     let w0 = 2.0 * PI * freq_hz / sample_rate;
     let g = 10.0_f64.powf(gain_db / 20.0);
     let w0 = w0.clamp(1e-6, PI - 1e-6);
@@ -32,8 +45,8 @@ pub fn calculate(
         FilterType::LowShelf => low_shelf_2(w0, q, g),
         FilterType::HighShelf => high_shelf_2(w0, q, g),
         FilterType::TiltShelf => tilt_shelf_2(w0, q, g),
-        FilterType::Lowpass => lowpass_2(w0, q),
-        FilterType::Highpass => highpass_2(w0, q),
+        FilterType::Lowpass => lowpass_2(w0, q, num_biquads),
+        FilterType::Highpass => highpass_2(w0, q, num_biquads),
         FilterType::Bandpass => bandpass_2(w0, q),
         FilterType::Notch => notch_2(w0, q),
         FilterType::Allpass => allpass_2(w0, q),
@@ -86,27 +99,45 @@ fn mag_sq_to_b(big_b: [f64; 3]) -> (f64, f64, f64) {
 
 // ── RBJ cookbook filters ─────────────────────────────────────────────
 
-fn lowpass_2(w0: f64, q: f64) -> Coeffs {
-    // Vicanek matched lowpass: impulse-invariance poles + magnitude matching.
-    // Matches magnitude at DC (1), Nyquist (analog value), and corner (Q^2).
-    // Better than BLT for passband accuracy near Nyquist.
-    let (a1, a2) = solve_poles(w0, 0.5 / q, 1.0);
+fn lowpass_2(w0: f64, q: f64, num_biquads: usize) -> Coeffs {
+    // Impulse-invariance poles with sigma correction for Nyquist accuracy.
+    // The II mapping z=exp(sT) shifts the pole angle below the analog value,
+    // producing a less-steep transition band. Reducing sigma compensates by
+    // increasing the effective Q, pushing poles closer to the unit circle.
+    let sigma = 0.5 / q;
+    let w_norm = w0 * std::f64::consts::FRAC_1_PI;
 
+    // Sigma correction: fitted from Pro-Q 4 reference data optimization.
+    let (sigma_eff, nyq_scale) = if sigma < 1.0 {
+        // Underdamped: reduce damping to steepen the transition band.
+        let correction = 0.982 * sigma.powf(0.529) * w_norm.powf(4.069);
+        let scaled = correction / (num_biquads as f64).sqrt();
+        (sigma * (1.0 - scaled.min(0.49)), 1.0)
+    } else if w_norm > 0.5 {
+        // Overdamped at high frequencies: increase sigma (paradoxically makes
+        // the dominant pole slower-decaying) + scale up Nyquist target.
+        // Only occurs for s2 display Q=0.5 (section Q≈0.35, sigma≈1.41).
+        let correction = 0.17 * w_norm;
+        (sigma * (1.0 + correction), 1.17)
+    } else {
+        (sigma, 1.0)
+    };
+
+    let (a1, a2) = solve_poles(w0, sigma_eff, 1.0);
+
+    // Vicanek 3-point numerator matching: DC=1, Nyquist=analog, corner=Q²
     let a0_big = (1.0 + a1 + a2).powi(2);
     let a1_big = (1.0 - a1 + a2).powi(2);
     let a2_big = -4.0 * a2;
     let p0 = phi0(w0);
     let p1 = phi1(w0);
 
-    // DC gain = 1
     let b0_big = a0_big;
-    // Nyquist gain = analog value (avoids cramping)
     let r = PI / w0;
     let r2 = r * r;
-    let nyq_mag_sq = 1.0 / ((1.0 - r2).powi(2) + r2 / (q * q));
+    let nyq_mag_sq = 1.0 / ((1.0 - r2).powi(2) + r2 / (q * q)) * nyq_scale;
     let b1_big = a1_big * nyq_mag_sq;
 
-    // Match at corner: |H(w0)|^2 = Q^2
     let q_sq = q * q;
     let target_at_corner = q_sq * (a0_big * p0 + a1_big * p1 + a2_big * p0 * p1 * 4.0);
     let b2_big = (target_at_corner - b0_big * p0 - b1_big * p1) / (4.0 * p0 * p1);
@@ -115,31 +146,62 @@ fn lowpass_2(w0: f64, q: f64) -> Coeffs {
     [1.0, a1, a2, b0, b1, b2]
 }
 
-fn highpass_2(w0: f64, q: f64) -> Coeffs {
-    // Vicanek impulse-invariance poles + exact zeros at z=1 (DC zero).
-    // Scale is set by matching |H(w0)| = Q (analog corner gain) rather than
-    // Nyquist. With the [scale, -2*scale, scale] form, only one free parameter
-    // (scale) exists after DC=0 is built in. Corner matching gives correct Q
-    // resonance, which dominates perceptual accuracy especially at high Q.
-    let (a1, a2) = solve_poles(w0, 0.5 / q, 1.0);
+fn highpass_2(w0: f64, q: f64, num_biquads: usize) -> Coeffs {
+    let sigma_base = 0.5 / q;
+    let w_norm = w0 * std::f64::consts::FRAC_1_PI;
 
-    // |H(w0)| = scale * |N(e^{jw0})| / |D(e^{jw0})| = Q
+    // HP pole correction strategy depends on damping regime.
+    let (a1_ii, a2_ii) = solve_poles(w0, sigma_base, 1.0);
+
+    let (a1, a2, scale_adj) = if q > 1.0 && w_norm > 0.3 {
+        // High Q: increase damping via sigma correction (fitted power law).
+        let correction = 0.978500 * w_norm.powf(6.153400) * q.ln().powf(0.769500);
+        let scaled = correction / num_biquads as f64;
+        let sigma = sigma_base * (1.0 + scaled);
+        let (a1, a2) = solve_poles(w0, sigma, 1.0);
+        (a1, a2, 1.0)
+    } else if sigma_base >= 1.0 && w_norm > 0.75 {
+        // Overdamped at high frequencies: reduce damping + adjust scale.
+        // Only activates above w_norm=0.75 where BLT blend is insufficient.
+        let sigma_corr = 0.3 * (w_norm - 0.15);
+        let sigma = sigma_base * (1.0 - sigma_corr).max(0.5);
+        let (a1, a2) = solve_poles(w0, sigma, 1.0);
+        let sr = (1.293 - 0.44 * w_norm).clamp(0.7, 1.0);
+        (a1, a2, sr)
+    } else if w0 > 0.8 {
+        // Underdamped low-Q: gentle BLT blend.
+        let g = (w0 * 0.5).tan();
+        let k = 1.0 / q;
+        let inv_a = 1.0 / (1.0 + g * (g + k));
+        let a1_blt = 2.0 * (g * g - 1.0) * inv_a;
+        let a2_blt = (1.0 + g * (g - k)) * inv_a;
+        let q_factor = 0.024 / (q * q + 0.024);
+        let w_factor = ((w0 - 0.8) * 0.5).clamp(0.0, 1.0);
+        let blt_w = q_factor * w_factor;
+        (
+            a1_ii + blt_w * (a1_blt - a1_ii),
+            a2_ii + blt_w * (a2_blt - a2_ii),
+            1.0,
+        )
+    } else {
+        (a1_ii, a2_ii, 1.0)
+    };
+
+    // Corner-matched scale: |H(w0)| = Q, with optional adjustment
     let cw = w0.cos();
     let sw = w0.sin();
     let c2w = 2.0 * cw * cw - 1.0;
     let s2w = 2.0 * sw * cw;
 
-    // Numerator at w0: scale * (1 - 2*e^{-jw0} + e^{-2jw0})
     let num_re = 1.0 - 2.0 * cw + c2w;
     let num_im = 2.0 * sw - s2w;
     let num_mag = (num_re * num_re + num_im * num_im).sqrt();
 
-    // Denominator at w0: (1 + a1*e^{-jw0} + a2*e^{-2jw0})
     let den_re = 1.0 + a1 * cw + a2 * c2w;
     let den_im = -a1 * sw - a2 * s2w;
     let den_mag = (den_re * den_re + den_im * den_im).sqrt();
 
-    let scale = q * den_mag / num_mag.max(1e-30);
+    let scale = q * den_mag / num_mag.max(1e-30) * scale_adj;
     [1.0, a1, a2, scale, -2.0 * scale, scale]
 }
 
@@ -576,14 +638,14 @@ mod tests {
 
     #[test]
     fn lowpass_has_unity_dc_gain() {
-        let c = lowpass_2(2.0 * PI * 1000.0 / 44100.0, 0.707);
+        let c = lowpass_2(2.0 * PI * 1000.0 / 44100.0, 0.707, 1);
         let dc = (c[3] + c[4] + c[5]) / (c[0] + c[1] + c[2]);
         assert!((dc - 1.0).abs() < 0.01, "DC gain = {dc}, expected ~1.0");
     }
 
     #[test]
     fn highpass_has_zero_dc_gain() {
-        let c = highpass_2(2.0 * PI * 1000.0 / 44100.0, 0.707);
+        let c = highpass_2(2.0 * PI * 1000.0 / 44100.0, 0.707, 1);
         let dc = (c[3] + c[4] + c[5]) / (c[0] + c[1] + c[2]);
         assert!(dc.abs() < 0.01, "DC gain = {dc}, expected ~0.0");
     }
