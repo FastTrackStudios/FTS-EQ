@@ -4,7 +4,6 @@
 //! frequency response visualization with draggable band nodes.
 
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 
 use audio_gui::prelude::{use_init_theme, DragProvider, LevelMeterDb};
 use audio_gui::viz::eq_graph::{get_band_color, EqBand, EqBandShape, EqGraph};
@@ -106,23 +105,23 @@ pub fn App() -> Element {
     // Count active bands
     let active_count = bands_signal.read().iter().filter(|b| b.used).count();
 
-    // Get window dimensions for overlay positioning
-    let dioxus_state = use_context::<Arc<DioxusState>>();
-    let (win_w, win_h) = dioxus_state.size();
-    let win_w = win_w as f64;
-    let win_h = win_h as f64;
-    // Layout constants (CSS pixels): header ~37px, bottom bar ~61px, graph margin 4px/6px
-    let header_h = 37.0;
-    let bottom_h = 61.0;
-    let margin_x = 6.0;
-    let margin_y = 4.0;
-    let graph_x = margin_x;
-    let graph_y = header_h + margin_y;
-    let graph_w = (win_w - margin_x * 2.0).max(1.0);
-    let graph_h = (win_h - header_h - bottom_h - margin_y * 2.0).max(1.0);
-
-    let base_css = t.base_css();
-    let root_style = t.root_style();
+    // Use transparent backgrounds so the vello background overlay (EQ graph) shows through.
+    let base_css = format!(
+        "*, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }} \
+         html, body {{ width: 100%; height: 100%; overflow: hidden; \
+         background: transparent; color: {text}; \
+         font-family: {font}; font-size: 13px; }}",
+        text = t.text,
+        font = t.font_family,
+    );
+    let root_style = format!(
+        "width:100vw; height:100vh; \
+         display:flex; flex-direction:column; \
+         color:{text}; font-family:{font}; font-size:13px; \
+         user-select:none; position:relative;",
+        text = t.text,
+        font = t.font_family,
+    );
     let spacing_root = t.spacing_root;
     let spacing_section = t.spacing_section;
     let spacing_tight = t.spacing_tight;
@@ -141,9 +140,7 @@ pub fn App() -> Element {
 
         DragProvider {
         div {
-            style: format!(
-                "{root_style} display:flex; flex-direction:column; overflow:hidden;",
-            ),
+            style: format!("{root_style} overflow:hidden;"),
 
             // ── Header ───────────────────────────────────────────
             div {
@@ -174,7 +171,7 @@ pub fn App() -> Element {
             // ── Main EQ graph ────────────────────────────────────
             div {
                 style: format!(
-                    "{style_inset} flex:1; min-height:0; position:relative; margin:4px 6px;",
+                    "{style_inset} flex:1; min-height:0; position:relative; margin:4px 6px; background:transparent;",
                 ),
                 EqGraph {
                     bands: bands_signal,
@@ -182,12 +179,6 @@ pub fn App() -> Element {
                     sample_rate: sample_rate,
                     spectrum_db: spectrum,
                     focused_band_out: focused_band,
-                    // Dynamic layout — computed from window dimensions for full resizability.
-                    // The vello SceneOverlay paints at these coordinates in window space.
-                    rendered_width: graph_w,
-                    rendered_height: graph_h,
-                    offset_x: graph_x,
-                    offset_y: graph_y,
 
                     on_band_change: {
                         let ctx = ctx.clone();
@@ -538,6 +529,10 @@ pub fn App() -> Element {
                         size: audio_gui::controls::knob::KnobSize::Small,
                     }
                 }
+            }
+            ResizeHandle {
+                min_width: 600,
+                min_height: 400,
             }
         }
         } // DragProvider

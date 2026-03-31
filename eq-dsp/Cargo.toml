@@ -27,3 +27,6 @@ harness = false
 
 [[example]]
 name = "process_wav"
+
+[[example]]
+name = "cascade_sweep"
