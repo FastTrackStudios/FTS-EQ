@@ -6,6 +6,7 @@
 
 use crate::biquad::PASSTHROUGH;
 use crate::design::{self, FilterType};
+use crate::parameters;
 use crate::section::Tdf2Section;
 
 /// Maximum filter order (number of poles).
@@ -82,12 +83,48 @@ impl Band {
             self.q
         };
 
+        // Apply parameter transformations from Pro-Q 4 binary
+        // These transformations handle type-specific gain/Q adjustments
+        let filter_type_code = match self.filter_type {
+            FilterType::Peak => 0,
+            FilterType::Highpass => 1,
+            FilterType::Lowpass => 2,
+            FilterType::Bandpass => 3,
+            FilterType::Notch => 4,
+            FilterType::LowShelf => 7,
+            FilterType::HighShelf => 8,
+            FilterType::TiltShelf => 9,
+            FilterType::BandShelf => 10,
+            FilterType::Allpass => 11,
+            FilterType::ShelfAlt => 12,
+            FilterType::FlatTilt => 6, // Type 6 in Pro-Q 4
+        };
+
+        // Use sensible defaults for parameter transform
+        // These values correspond to standard filter behavior in Pro-Q 4
+        let transformed = parameters::transform_parameters(
+            filter_type_code,
+            q,
+            self.gain_db,
+            self.freq_hz,
+            sample_rate,
+            -1,  // mode: -1 = default/simple path
+            0,   // param_state: 0 = standard operation
+            0.0, // sq_component: 0 = no special Q² adjustment
+            0.0, // mode_param: 0 = no special mode parameter
+        );
+
+        // Use transformed Q and gain for filter design
+        // These are computed by the parameter transformation stage
+        let effective_q = transformed.processed_q;
+        let effective_gain = transformed.gain_term;
+
         // Use pro design pipeline: analog prototype -> ZPK -> biquad sections
         let sos = design::design_filter(
             self.filter_type,
             self.freq_hz,
-            q,
-            self.gain_db,
+            effective_q,
+            effective_gain,
             sample_rate,
             order,
         );
