@@ -330,18 +330,22 @@ impl Band {
 
         // Higher-order bell: cascade of identical peak biquads with Q compensation.
         // Each biquad shares the gain equally (gain_db / n_sections per section).
+        // Pro-Q 4 matching: use cascade-aware Nyquist compensation (FUN_1801e3b90).
         let n = order / 2;
         self.num_sections = n.min(MAX_SECTIONS);
 
         let gain_per_section = self.gain_db / self.num_sections as f64;
 
         for i in 0..self.num_sections {
-            let c = coeff::calculate(
+            // Use calculate_cascade_indexed to enable cascade-dependent Nyquist compensation
+            let c = coeff::calculate_cascade_indexed(
                 FilterType::Peak,
                 self.freq_hz,
                 self.q,
                 gain_per_section,
                 config.sample_rate,
+                self.num_sections,
+                i,
             );
             self.set_section_coeffs(i, c);
         }
