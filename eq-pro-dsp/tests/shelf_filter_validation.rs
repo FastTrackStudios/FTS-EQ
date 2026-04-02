@@ -10,7 +10,7 @@
 
 use eq_pro_dsp::biquad::Coeffs;
 use eq_pro_dsp::shelf_zpk;
-use std::f64::consts::{PI, FRAC_1_SQRT_2};
+use std::f64::consts::{FRAC_1_SQRT_2, PI};
 
 /// Helper: Evaluate magnitude response in dB at a given normalized digital frequency (0 to π)
 fn eval_magnitude_db(coeffs: &[Coeffs], w: f64) -> f64 {
@@ -145,9 +145,18 @@ fn test_shelf_zero_gain_is_passthrough() {
 
     // Passthrough is [1, 0, 0, 1, 0, 0]
     let passthrough = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
-    assert_eq!(low[0], passthrough, "Low shelf with 0dB should be passthrough");
-    assert_eq!(high[0], passthrough, "High shelf with 0dB should be passthrough");
-    assert_eq!(tilt[0], passthrough, "Tilt shelf with 0dB should be passthrough");
+    assert_eq!(
+        low[0], passthrough,
+        "Low shelf with 0dB should be passthrough"
+    );
+    assert_eq!(
+        high[0], passthrough,
+        "High shelf with 0dB should be passthrough"
+    );
+    assert_eq!(
+        tilt[0], passthrough,
+        "Tilt shelf with 0dB should be passthrough"
+    );
 }
 
 #[test]
@@ -210,17 +219,22 @@ fn test_shelf_type_differentiation() {
     assert!(dc_low > 4.0 && nyq_low < 2.0, "Type 7 signature incorrect");
 
     // High shelf: DC flat, Nyquist boost
-    assert!(dc_high < 2.0 && nyq_high > 4.0, "Type 8 signature incorrect");
+    assert!(
+        dc_high < 2.0 && nyq_high > 4.0,
+        "Type 8 signature incorrect"
+    );
 
     // Tilt shelf: Both boosted, Nyquist > DC
-    assert!(dc_tilt > 1.0 && nyq_tilt > dc_tilt, "Type 9 signature incorrect");
+    assert!(
+        dc_tilt > 1.0 && nyq_tilt > dc_tilt,
+        "Type 9 signature incorrect"
+    );
 }
 
 #[test]
 fn test_q_transformation_formula_applied() {
     /// Verify Q is transformed according to Formula 2: Q_transformed = Q * INV_SQRT2
     /// This should result in different filter shapes than untransformed Q
-
     // Formula 2 constant: 1/sqrt(2)
     let inv_sqrt2 = FRAC_1_SQRT_2;
 
@@ -246,7 +260,6 @@ fn test_q_transformation_formula_applied() {
 fn test_gain_independence_from_q() {
     /// Verify that gain and Q are applied independently
     /// Different Q should NOT change the DC/Nyquist gain values
-
     let low_q = shelf_zpk::design_low_shelf_zpk(1, 1000.0, 0.5, 6.0, 48000.0);
     let high_q = shelf_zpk::design_low_shelf_zpk(1, 1000.0, 2.0, 6.0, 48000.0);
 
