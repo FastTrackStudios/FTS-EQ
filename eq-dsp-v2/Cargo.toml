@@ -1,0 +1,19 @@
+[package]
+name = "eq-dsp-v2"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+description = "EQ processing engine v2 — Pro-Q 4 architecture: analog prototype → ZPK → transform → biquad"
+
+[features]
+default = []
+test-util = ["rustfft"]
+
+[dependencies]
+fts-dsp = { path = "../../fts-dsp" }
+rustfft = { version = "6.2", optional = true }
+
+[dev-dependencies]
+eq-dsp-v2 = { path = ".", features = ["test-util"] }
+rustfft = "6.2"
