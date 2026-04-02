@@ -204,6 +204,95 @@ pub fn butterworth_bs(order: usize, freq_hz: f64, q: f64, sample_rate: f64) -> Z
     Zpk::new(bs_zeros, bs_poles, 1.0)
 }
 
+/// Generate Butterworth bandstop via elliptic LP→BS transformation.
+///
+/// This is Pro-Q 4's exact approach for type 4 (notch) filters. Similar to elliptic bandpass
+/// but uses the complement transformation to create notches instead of peaks.
+///
+/// Algorithm:
+///   1. Compute pre-warped center frequency and bandwidth
+///   2. For each Butterworth prototype pole, use elliptic functions to map
+///      the pole angle to exact BS pole positions
+///   3. Each section gets unique pole/zero positions (NOT identical biquads)
+pub fn butterworth_bs_elliptic(order: usize, freq_hz: f64, q: f64, sample_rate: f64) -> Zpk {
+    let w0 = 2.0 * PI * freq_hz / sample_rate;
+    let w0_a = 2.0 * sample_rate * (w0 / 2.0).tan();
+    let bw_a = w0_a / q;
+
+    // Selectivity parameter for elliptic functions: k = bw / (2 * w0)
+    // Controls how "narrow" the notch is. Clamped for numerical stability.
+    let k = (bw_a / (2.0 * w0_a)).min(0.9999999);
+
+    // Complete elliptic integral K(k) for normalization
+    let kk = elliptic::elliptic_k_complete(k);
+
+    let lp = butterworth_lp(order);
+
+    let mut bs_poles = Vec::with_capacity(2 * order);
+    let mut bs_zeros = Vec::with_capacity(2 * order);
+
+    // Process poles — Butterworth prototype poles come in conjugate pairs.
+    // For each unique pole (or pair), compute the elliptic BS mapping.
+    let mut i = 0;
+    while i < lp.poles.len() {
+        let s_k = lp.poles[i];
+
+        if s_k.im.abs() < 1e-14 {
+            // Real pole (odd-order only): use standard quadratic fallback
+            let b = Complex::new(bw_a, 0.0) / s_k;
+            let disc = b * b - Complex::new(4.0 * w0_a * w0_a, 0.0);
+            let sqrt_disc = disc.sqrt();
+            bs_poles.push((b + sqrt_disc) / 2.0);
+            bs_poles.push((b - sqrt_disc) / 2.0);
+            bs_zeros.push(Complex::new(0.0, w0_a));
+            bs_zeros.push(Complex::new(0.0, -w0_a));
+            i += 1;
+        } else {
+            // Complex conjugate pair: use elliptic mapping
+            let theta_k = s_k.arg();
+
+            // Normalize the angle to a [0, 1] parameter within the left half-plane.
+            // Butterworth poles span from pi/2+eps to pi-eps (upper LHP).
+            let u_norm = (theta_k - PI / 2.0) / (PI / 2.0);
+            let u = u_norm.abs() * kk;
+
+            // Evaluate Jacobi elliptic functions for exact pole placement
+            let sn_val = elliptic::elliptic_sn(u, k);
+            let cn_val = (1.0 - sn_val * sn_val).max(0.0).sqrt();
+            let dn_val = (1.0 - k * k * sn_val * sn_val).max(0.0).sqrt();
+
+            // The elliptic transform maps the prototype pole to BS poles at:
+            //   sigma = bw * sn * dn / (1 - k^2 * sn^2)
+            //   omega_offset = bw * cn / (1 - k^2 * sn^2)
+            let denom = 1.0 - k * k * sn_val * sn_val + 1e-30;
+            let sigma = bw_a * sn_val * dn_val / denom;
+            let omega_offset = bw_a * cn_val / denom;
+
+            // BS pole pair above center frequency
+            let p_upper = Complex::new(-sigma, w0_a + omega_offset);
+            // BS pole pair below center frequency
+            let p_lower = Complex::new(-sigma, -(w0_a + omega_offset));
+
+            bs_poles.push(p_upper);
+            bs_poles.push(p_upper.conj());
+            bs_poles.push(p_lower);
+            bs_poles.push(p_lower.conj());
+
+            // Zeros at +/- j*w0 for each pole pair
+            bs_zeros.push(Complex::new(0.0, w0_a));
+            bs_zeros.push(Complex::new(0.0, -w0_a));
+            bs_zeros.push(Complex::new(0.0, w0_a));
+            bs_zeros.push(Complex::new(0.0, -w0_a));
+
+            // Skip the conjugate pole (processed together)
+            i += 2;
+        }
+    }
+
+    let gain = 1.0;
+    Zpk::new(bs_zeros, bs_poles, gain)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

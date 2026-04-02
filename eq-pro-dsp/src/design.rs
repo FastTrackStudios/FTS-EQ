@@ -188,7 +188,7 @@ fn design_bandpass(n: usize, freq_hz: f64, q: f64, sample_rate: f64) -> Vec<Coef
 ///
 /// Pro-Q 4 type 4: same machinery as bandpass but with BS transform.
 fn design_notch(n: usize, freq_hz: f64, q: f64, sample_rate: f64) -> Vec<Coeffs> {
-    let bs = prototype::butterworth_bs(n, freq_hz, q, sample_rate);
+    let bs = prototype::butterworth_bs_elliptic(n, freq_hz, q, sample_rate);
     let digital = transform::bilinear(&bs, sample_rate);
     let sos = biquad::zpk_to_sos(&digital);
 
