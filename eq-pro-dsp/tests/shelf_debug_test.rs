@@ -1,8 +1,6 @@
 /// Debug test for shelf filter implementation
 /// Trace through the ZPK pipeline to understand gain application
-use eq_pro_dsp::biquad;
 use eq_pro_dsp::prototype;
-use eq_pro_dsp::zpk::Complex;
 use std::f64::consts::PI;
 
 #[test]
@@ -75,11 +73,11 @@ fn debug_shelf_gain_parameter() {
 fn debug_high_shelf_parameter() {
     // Test case 2: High shelf type 8 (NOT using apply_shelf_gain_to_zpk)
 
-    let order = 2;
-    let freq_hz = 1000.0;
-    let q = 0.707;
-    let gain_db = 6.0;
-    let sample_rate = 48000.0;
+    let order = 2_usize;
+    let freq_hz = 1000.0_f64;
+    let q = 0.707_f64;
+    let gain_db = 6.0_f64;
+    let _sample_rate = 48000.0_f64;
 
     println!("\n=== High Shelf (Type 8) Debug ===");
     println!("Order: {}", order);
@@ -104,11 +102,11 @@ fn debug_high_shelf_parameter() {
 fn debug_tilt_shelf_parameter() {
     // Test case 3: Tilt shelf type 9
 
-    let order = 2;
-    let freq_hz = 2000.0;
-    let q = 0.707;
-    let gain_db = 6.0;
-    let sample_rate = 48000.0;
+    let order = 2_usize;
+    let freq_hz = 2000.0_f64;
+    let q = 0.707_f64;
+    let gain_db = 6.0_f64;
+    let _sample_rate = 48000.0_f64;
 
     println!("\n=== Tilt Shelf (Type 9) Debug ===");
     println!("Order: {}", order);
@@ -130,7 +128,7 @@ fn analyze_gain_db_vs_q_relationship() {
     println!("\n=== Gain vs Q Relationship ===");
 
     // Various Q and gain combinations
-    let test_cases = vec![
+    let test_cases: Vec<(f64, f64)> = vec![
         (0.5, 6.0),
         (0.707, 6.0),
         (1.0, 6.0),
@@ -141,8 +139,8 @@ fn analyze_gain_db_vs_q_relationship() {
 
     for (q, gain_db) in test_cases {
         let gain_linear = 10.0_f64.powf(gain_db / 20.0);
-        let q_factor_low = q.powf(0.5 / 2.0); // Assuming order=2
-        let q_factor_high = q.powf(1.0 / 2.0);
+        let q_factor_low = q.powf(0.5_f64 / 2.0_f64); // Assuming order=2
+        let q_factor_high = q.powf(1.0_f64 / 2.0_f64);
 
         println!("\nQ={}, Gain={}dB:", q, gain_db);
         println!("  gain_linear = {}", gain_linear);
