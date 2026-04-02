@@ -200,67 +200,39 @@ pub fn butterworth_bs_elliptic(order: usize, freq_hz: f64, q: f64, sample_rate: 
     // Complete elliptic integral K(k) for normalization
     let kk = elliptic::elliptic_k_complete(k);
 
-    let lp = butterworth_lp(order);
-
     let mut bs_poles = Vec::with_capacity(2 * order);
     let mut bs_zeros = Vec::with_capacity(2 * order);
 
-    // Process poles — Butterworth prototype poles come in conjugate pairs.
-    // For each unique pole (or pair), compute the elliptic BS mapping.
-    let mut i = 0;
-    while i < lp.poles.len() {
-        let s_k = lp.poles[i];
+    // CRITICAL FIX: Section-indexed elliptic parametrization (same as bandpass).
+    // Pro-Q 4 generates DISTINCT poles for each section using u_i = (2*i+1)*K(k)/order,
+    // not duplicates. Each section index gets a DIFFERENT elliptic function evaluation.
+    for section_idx in 0..order {
+        let u_i = (2.0 * section_idx as f64 + 1.0) * kk / order as f64;
 
-        if s_k.im.abs() < 1e-14 {
-            // Real pole (odd-order only): use standard quadratic fallback
-            let b = Complex::new(bw_a, 0.0) / s_k;
-            let disc = b * b - Complex::new(4.0 * w0_a * w0_a, 0.0);
-            let sqrt_disc = disc.sqrt();
-            bs_poles.push((b + sqrt_disc) / 2.0);
-            bs_poles.push((b - sqrt_disc) / 2.0);
-            bs_zeros.push(Complex::new(0.0, w0_a));
-            bs_zeros.push(Complex::new(0.0, -w0_a));
-            i += 1;
-        } else {
-            // Complex conjugate pair: use elliptic mapping
-            let theta_k = s_k.arg();
+        // Evaluate Jacobi elliptic functions at this section's parameter
+        let sn_val = elliptic::elliptic_sn(u_i, k);
+        let cn_val = (1.0 - sn_val * sn_val).max(0.0).sqrt();
+        let dn_val = (1.0 - k * k * sn_val * sn_val).max(0.0).sqrt();
 
-            // Normalize the angle to a [0, 1] parameter within the left half-plane.
-            // Butterworth poles span from pi/2+eps to pi-eps (upper LHP).
-            let u_norm = (theta_k - PI / 2.0) / (PI / 2.0);
-            let u = u_norm.abs() * kk;
+        // The elliptic transform maps to BS poles:
+        //   sigma = bw * sn * dn / (1 - k^2 * sn^2)
+        //   omega_offset = bw * cn / (1 - k^2 * sn^2)
+        // Each section gets UNIQUE sigma and omega_offset based on section_idx.
+        let denom = 1.0 - k * k * sn_val * sn_val + 1e-30;
+        let sigma = bw_a * sn_val * dn_val / denom;
+        let omega_offset = bw_a * cn_val / denom;
 
-            // Evaluate Jacobi elliptic functions for exact pole placement
-            let sn_val = elliptic::elliptic_sn(u, k);
-            let cn_val = (1.0 - sn_val * sn_val).max(0.0).sqrt();
-            let dn_val = (1.0 - k * k * sn_val * sn_val).max(0.0).sqrt();
+        // Create ONE conjugate pole pair for this section.
+        // The ±omega_offset creates the above/below-center-frequency pole pair.
+        let p_upper = Complex::new(-sigma, w0_a + omega_offset);
+        let p_lower = Complex::new(-sigma, -(w0_a + omega_offset));
 
-            // The elliptic transform maps the prototype pole to BS poles at:
-            //   sigma = bw * sn * dn / (1 - k^2 * sn^2)
-            //   omega_offset = bw * cn / (1 - k^2 * sn^2)
-            let denom = 1.0 - k * k * sn_val * sn_val + 1e-30;
-            let sigma = bw_a * sn_val * dn_val / denom;
-            let omega_offset = bw_a * cn_val / denom;
+        bs_poles.push(p_upper);
+        bs_poles.push(p_lower);
 
-            // BS pole pair above center frequency
-            let p_upper = Complex::new(-sigma, w0_a + omega_offset);
-            // BS pole pair below center frequency
-            let p_lower = Complex::new(-sigma, -(w0_a + omega_offset));
-
-            bs_poles.push(p_upper);
-            bs_poles.push(p_upper.conj());
-            bs_poles.push(p_lower);
-            bs_poles.push(p_lower.conj());
-
-            // Zeros at +/- j*w0 for each pole pair
-            bs_zeros.push(Complex::new(0.0, w0_a));
-            bs_zeros.push(Complex::new(0.0, -w0_a));
-            bs_zeros.push(Complex::new(0.0, w0_a));
-            bs_zeros.push(Complex::new(0.0, -w0_a));
-
-            // Skip the conjugate pole (processed together)
-            i += 2;
-        }
+        // Zeros at +/- j*w0 for notch (two zeros per section)
+        bs_zeros.push(Complex::new(0.0, w0_a));
+        bs_zeros.push(Complex::new(0.0, -w0_a));
     }
 
     let gain = 1.0;
