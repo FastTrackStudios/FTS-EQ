@@ -228,7 +228,13 @@ mod tests {
         // All sections should be valid (non-NaN)
         for (i, section) in sos.iter().enumerate() {
             for (j, &coeff) in section.iter().enumerate() {
-                assert!(coeff.is_finite(), "section[{}][{}] is not finite: {}", i, j, coeff);
+                assert!(
+                    coeff.is_finite(),
+                    "section[{}][{}] is not finite: {}",
+                    i,
+                    j,
+                    coeff
+                );
             }
         }
     }

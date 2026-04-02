@@ -94,12 +94,7 @@ pub fn butterworth_bp(order: usize, freq_hz: f64, q: f64, sample_rate: f64) -> Z
 ///   2. For each Butterworth prototype pole, use elliptic functions to map
 ///      the pole angle to exact BP pole positions
 ///   3. Each section gets unique pole/zero positions (NOT identical biquads)
-pub fn butterworth_bp_elliptic(
-    order: usize,
-    freq_hz: f64,
-    q: f64,
-    sample_rate: f64,
-) -> Zpk {
+pub fn butterworth_bp_elliptic(order: usize, freq_hz: f64, q: f64, sample_rate: f64) -> Zpk {
     let w0 = 2.0 * PI * freq_hz / sample_rate;
     let w0_a = 2.0 * sample_rate * (w0 / 2.0).tan();
     let bw_a = w0_a / q;
@@ -238,7 +233,10 @@ mod tests {
         let proto = butterworth_lp_prewarped(2, 1000.0, 48000.0);
         assert_eq!(proto.poles.len(), 2);
         for p in &proto.poles {
-            assert!(p.mag() > 100.0, "pre-warped pole should have large magnitude");
+            assert!(
+                p.mag() > 100.0,
+                "pre-warped pole should have large magnitude"
+            );
         }
     }
 
@@ -280,7 +278,11 @@ mod tests {
     fn elliptic_bp_produces_correct_pole_count() {
         let bp = butterworth_bp_elliptic(2, 1000.0, 2.0, 48000.0);
         // 2nd order = 1 conjugate pair -> 4 BP poles + conjugates
-        assert!(bp.poles.len() >= 4, "expected >= 4 BP poles, got {}", bp.poles.len());
+        assert!(
+            bp.poles.len() >= 4,
+            "expected >= 4 BP poles, got {}",
+            bp.poles.len()
+        );
     }
 
     #[test]
@@ -290,7 +292,8 @@ mod tests {
             assert!(
                 p.re < 1e-10,
                 "elliptic BP pole {} should be in LHP, got re={}",
-                i, p.re
+                i,
+                p.re
             );
         }
     }
@@ -299,7 +302,11 @@ mod tests {
     fn elliptic_bp_4th_order() {
         let bp = butterworth_bp_elliptic(4, 1000.0, 4.0, 48000.0);
         // 4th order = 2 conjugate pairs -> 8 BP poles
-        assert!(bp.poles.len() >= 8, "expected >= 8 BP poles, got {}", bp.poles.len());
+        assert!(
+            bp.poles.len() >= 8,
+            "expected >= 8 BP poles, got {}",
+            bp.poles.len()
+        );
     }
 
     #[test]
@@ -309,15 +316,18 @@ mod tests {
         let ell_bp = butterworth_bp_elliptic(2, 1000.0, 2.0, 48000.0);
 
         // Both should have poles in LHP with similar magnitudes
-        let std_mag: f64 = std_bp.poles.iter().map(|p| p.mag()).sum::<f64>() / std_bp.poles.len() as f64;
-        let ell_mag: f64 = ell_bp.poles.iter().map(|p| p.mag()).sum::<f64>() / ell_bp.poles.len() as f64;
+        let std_mag: f64 =
+            std_bp.poles.iter().map(|p| p.mag()).sum::<f64>() / std_bp.poles.len() as f64;
+        let ell_mag: f64 =
+            ell_bp.poles.iter().map(|p| p.mag()).sum::<f64>() / ell_bp.poles.len() as f64;
 
         // They won't be identical but should be in the same ballpark
         let ratio = std_mag / (ell_mag + 1e-30);
         assert!(
             ratio > 0.1 && ratio < 10.0,
             "standard and elliptic BP pole magnitudes should be comparable: std={}, ell={}",
-            std_mag, ell_mag
+            std_mag,
+            ell_mag
         );
     }
 }

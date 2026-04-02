@@ -24,6 +24,13 @@ use crate::zpk::{Complex, Zpk};
 /// Pro-Q 4 type 7: Butterworth LP prototype → apply_shelf_gain_to_zpk
 /// (scales zeros × gain, poles ÷ gain) → bilinear → biquads.
 ///
+/// From binary analysis of setup_eq_band_filter (0x1800fdf10):
+///   - For shelf types, bilinear_transform_zpk receives `1/Q_internal` as its
+///     frequency scaling parameter (param_3), which uniformly scales all prototype
+///     poles before the bilinear transform.
+///   - The biquad Q for shelves is always INV_SQRT2 (set at 0x1800fdfc0).
+///   - User Q controls the shelf transition steepness via this pole scaling.
+///
 /// `n_sections` is the number of biquad sections (order / 2).
 pub fn design_low_shelf(
     n_sections: usize,
@@ -38,17 +45,17 @@ pub fn design_low_shelf(
         return vec![PASSTHROUGH; n];
     }
 
-    // For single-section shelves, use RBJ cookbook (exact for 2nd order,
-    // and lets us properly handle Q).
-    // For multi-section, also use RBJ with Butterworth Q distribution.
     let w0 = 2.0 * PI * freq_hz / sample_rate;
 
     (0..n)
         .map(|k| {
             let section_gain = gain_db / n as f64;
-            // Pro-Q 4 shelves use Butterworth Q per section (from filter_type_dispatcher
-            // iVar9==2 path). User Q controls frequency span, not shelf resonance.
-            let section_q = butterworth_section_q(k, n);
+            // Pro-Q 4 uses Butterworth pole placement per section, then uniformly
+            // scales all poles by 1/Q_internal in bilinear_transform_zpk.
+            // In RBJ terms, the section Q is the Butterworth Q scaled by the
+            // user's Q relative to the default (INV_SQRT2).
+            let bw_q = butterworth_section_q(k, n);
+            let section_q = bw_q * (q / std::f64::consts::FRAC_1_SQRT_2);
             rbj_low_shelf(w0, section_q, section_gain)
         })
         .collect()
@@ -58,6 +65,8 @@ pub fn design_low_shelf(
 ///
 /// Pro-Q 4 type 8: Butterworth LP prototype → bilinear → numerator normalization
 /// in zpk_sections_to_biquads to apply shelf gain.
+///
+/// Same Q scaling as low shelf: bilinear_transform_zpk scales poles by 1/Q_internal.
 ///
 /// `n_sections` is the number of biquad sections (order / 2).
 pub fn design_high_shelf(
@@ -78,7 +87,8 @@ pub fn design_high_shelf(
     (0..n)
         .map(|k| {
             let section_gain = gain_db / n as f64;
-            let section_q = butterworth_section_q(k, n);
+            let bw_q = butterworth_section_q(k, n);
+            let section_q = bw_q * (q / std::f64::consts::FRAC_1_SQRT_2);
             rbj_high_shelf(w0, section_q, section_gain)
         })
         .collect()
@@ -108,7 +118,8 @@ pub fn design_tilt_shelf(
     (0..n)
         .map(|k| {
             let section_gain = gain_db / n as f64;
-            let section_q = butterworth_section_q(k, n);
+            let bw_q = butterworth_section_q(k, n);
+            let section_q = bw_q * (q / std::f64::consts::FRAC_1_SQRT_2);
             rbj_low_shelf(w0, section_q, section_gain)
         })
         .collect()
@@ -269,7 +280,8 @@ mod tests {
         assert!(
             dc > nyq + 3.0,
             "low shelf DC ({}) should be louder than Nyquist ({})",
-            dc, nyq
+            dc,
+            nyq
         );
     }
 
@@ -292,7 +304,8 @@ mod tests {
         assert!(
             nyq > dc + 3.0,
             "high shelf Nyquist ({}) should be louder than DC ({})",
-            nyq, dc
+            nyq,
+            dc
         );
     }
 
@@ -322,7 +335,8 @@ mod tests {
         assert!(
             low > high,
             "tilt shelf should boost lows more than highs: low={}, high={}",
-            low, high
+            low,
+            high
         );
     }
 
@@ -335,7 +349,8 @@ mod tests {
         assert!(
             center > dc + 2.0,
             "band shelf center ({}) should be louder than DC ({})",
-            center, dc
+            center,
+            dc
         );
     }
 

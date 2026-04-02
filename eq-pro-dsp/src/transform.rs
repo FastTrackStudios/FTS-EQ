@@ -95,10 +95,7 @@ mod tests {
     fn bilinear_preserves_pole_count() {
         let zpk = Zpk::new(
             vec![Complex::new(-1.0, 0.0)],
-            vec![
-                Complex::new(-0.5, 0.5),
-                Complex::new(-0.5, -0.5),
-            ],
+            vec![Complex::new(-0.5, 0.5), Complex::new(-0.5, -0.5)],
             1.0,
         );
         let z = bilinear(&zpk, 44100.0);
@@ -132,11 +129,7 @@ mod tests {
     #[test]
     fn bilinear_dc_maps_to_z1() {
         // s = 0 should map to z = 1.
-        let zpk = Zpk::new(
-            vec![Complex::ZERO],
-            vec![Complex::new(-1.0, 0.0)],
-            1.0,
-        );
+        let zpk = Zpk::new(vec![Complex::ZERO], vec![Complex::new(-1.0, 0.0)], 1.0);
         let z = bilinear(&zpk, 44100.0);
         let z0 = z.zeros[0];
         assert!(
@@ -150,10 +143,7 @@ mod tests {
     fn allpass_zero_count_matches_poles() {
         let zpk = Zpk::new(
             vec![Complex::new(0.5, 0.0)],
-            vec![
-                Complex::new(0.5, 0.3),
-                Complex::new(0.5, -0.3),
-            ],
+            vec![Complex::new(0.5, 0.3), Complex::new(0.5, -0.3)],
             1.0,
         );
         let ap = make_allpass(&zpk);
@@ -163,11 +153,7 @@ mod tests {
     #[test]
     fn allpass_unit_magnitude() {
         // A simple allpass from a single real pole inside the unit circle.
-        let zpk = Zpk::new(
-            vec![],
-            vec![Complex::new(0.5, 0.0)],
-            1.0,
-        );
+        let zpk = Zpk::new(vec![], vec![Complex::new(0.5, 0.0)], 1.0);
         let ap = make_allpass(&zpk);
 
         // Check that |H(e^jw)| ≈ 1 at several frequencies.

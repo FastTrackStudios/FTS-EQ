@@ -231,12 +231,7 @@ mod tests {
     #[test]
     fn sn_reduces_to_tanh_when_k_one() {
         for &u in &[0.0, 0.5, 1.0, -0.7, 2.0] {
-            assert_approx(
-                elliptic_sn(u, 1.0),
-                u.tanh(),
-                1e-14,
-                &format!("sn({u}, 1)"),
-            );
+            assert_approx(elliptic_sn(u, 1.0), u.tanh(), 1e-14, &format!("sn({u}, 1)"));
         }
     }
 
@@ -317,12 +312,7 @@ mod tests {
                 let u = frac * big_k;
                 let y = elliptic_sn(u, k);
                 let u_recovered = elliptic_asn(y, k);
-                assert_approx(
-                    u_recovered,
-                    u,
-                    1e-8,
-                    &format!("roundtrip k={k}, u={u:.6}"),
-                );
+                assert_approx(u_recovered, u, 1e-8, &format!("roundtrip k={k}, u={u:.6}"));
             }
         }
     }
@@ -330,12 +320,7 @@ mod tests {
     #[test]
     fn asn_at_zero_is_zero() {
         for &k in &[0.0, 0.3, 0.5, 0.99] {
-            assert_approx(
-                elliptic_asn(0.0, k),
-                0.0,
-                1e-14,
-                &format!("asn(0, {k})"),
-            );
+            assert_approx(elliptic_asn(0.0, k), 0.0, 1e-14, &format!("asn(0, {k})"));
         }
     }
 
@@ -380,12 +365,7 @@ mod tests {
             for &y in &[0.1, 0.3, 0.5, 0.7, 0.9] {
                 let u = elliptic_asn(y, k);
                 let y_back = elliptic_sn(u, k);
-                assert_approx(
-                    y_back,
-                    y,
-                    1e-8,
-                    &format!("sn(asn({y}, {k}), {k})"),
-                );
+                assert_approx(y_back, y, 1e-8, &format!("sn(asn({y}, {k}), {k})"));
             }
         }
     }

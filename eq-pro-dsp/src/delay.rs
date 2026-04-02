@@ -13,7 +13,7 @@ use crate::constants::{MAX_DELAY_SAMPLES_PER_LEVEL, NUM_DELAY_LEVELS};
 /// efficient delay implementation.
 pub struct DelayFilter {
     buffer: Vec<f64>,
-    mask: usize,      // power-of-2 - 1
+    mask: usize, // power-of-2 - 1
     write_pos: usize,
     delay_samples: usize,
 }
@@ -162,10 +162,7 @@ mod tests {
 
         // First 3 outputs should be 0 (initial buffer)
         for (i, &out) in outputs.iter().take(3).enumerate() {
-            assert!(
-                out.abs() < 1e-14,
-                "Sample {i} should be 0.0, got {out}"
-            );
+            assert!(out.abs() < 1e-14, "Sample {i} should be 0.0, got {out}");
         }
 
         // After that, output should be input delayed by 3

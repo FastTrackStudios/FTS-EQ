@@ -519,7 +519,10 @@ mod tests {
     #[test]
     fn gain_q_interaction_zero_means_no_change() {
         let q = apply_gain_q_interaction(2.0, 12.0, 0.0);
-        assert!((q - 2.0).abs() < 1e-10, "Zero interaction should not change Q");
+        assert!(
+            (q - 2.0).abs() < 1e-10,
+            "Zero interaction should not change Q"
+        );
     }
 
     #[test]

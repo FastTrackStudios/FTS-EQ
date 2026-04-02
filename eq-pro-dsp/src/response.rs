@@ -117,11 +117,7 @@ pub fn compute_magnitude_response_zpk(
 }
 
 /// Compute phase response from a ZPK representation.
-pub fn compute_phase_response_zpk(
-    zpk: &Zpk,
-    frequencies: &[f64],
-    sample_rate: f64,
-) -> Vec<f64> {
+pub fn compute_phase_response_zpk(zpk: &Zpk, frequencies: &[f64], sample_rate: f64) -> Vec<f64> {
     frequencies
         .iter()
         .map(|&freq| {
@@ -179,7 +175,11 @@ mod tests {
         let mags = compute_magnitude_response(&sos, &freqs, 48000.0);
 
         // Below cutoff should be ~0 dB
-        assert!(mags[0].abs() < 1.0, "100 Hz should be ~0 dB, got {}", mags[0]);
+        assert!(
+            mags[0].abs() < 1.0,
+            "100 Hz should be ~0 dB, got {}",
+            mags[0]
+        );
         // Above cutoff should be attenuated
         assert!(
             mags[2] < -20.0,
@@ -228,9 +228,9 @@ mod tests {
 
     #[test]
     fn zpk_magnitude_matches_sos() {
+        use crate::biquad;
         use crate::prototype;
         use crate::transform;
-        use crate::biquad;
 
         let proto = prototype::butterworth_lp_prewarped(4, 1000.0, 48000.0);
         let digital = transform::bilinear(&proto, 48000.0);
