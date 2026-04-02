@@ -1,0 +1,11 @@
+[package]
+name = "eq-pro-dsp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "EQ processing engine — Pro-Q 4 faithful extraction with elliptic transforms, cascade coefficients, and anti-cramping"
+
+[dependencies]
+fts-dsp = { path = "../../fts-dsp" }
+
+[dev-dependencies]

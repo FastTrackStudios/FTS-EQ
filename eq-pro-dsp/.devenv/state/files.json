@@ -1,0 +1,10 @@
+{
+  "managedFiles": [
+    ".claude/commands/build.md",
+    ".claude/commands/check.md",
+    ".claude/commands/test.md",
+    ".mcp.json",
+    ".pre-commit-config.yaml",
+    "/home/cody/Development/FastTrackStudio/FTS-Plugins/crates/fts-eq/eq-pro-dsp/.claude/settings.json"
+  ]
+}

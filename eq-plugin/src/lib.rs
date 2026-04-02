@@ -9,7 +9,7 @@ use rustfft::{num_complex::Complex, FftPlanner};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use eq_dsp_v2::{EqChain, FilterType};
+use eq_pro_dsp::{EqChain, FilterType};
 
 pub mod editor;
 
@@ -382,7 +382,7 @@ fn shape_to_filter_type(shape: i32) -> FilterType {
         5 => FilterType::Notch,     // Notch
         6 => FilterType::Bandpass,  // Bandpass
         7 => FilterType::TiltShelf, // Tilt Shelf
-        8 => FilterType::TiltShelf, // Flat Tilt (use tilt shelf for now)
+        8 => FilterType::FlatTilt,  // Flat Tilt (type 6 in Pro-Q 4 binary)
         9 => FilterType::Allpass,   // All Pass
         _ => FilterType::Peak,
     }
