@@ -16,6 +16,7 @@ use std::f64::consts::PI;
 use crate::biquad::{self, Coeffs};
 use crate::cascade;
 use crate::prototype;
+use crate::shelf;
 use crate::shelf_zpk;
 use crate::transform;
 

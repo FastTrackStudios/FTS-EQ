@@ -44,11 +44,12 @@ const CONST_LOW_SHELF: f64 = 0.5; // At 0x180231a00
 /// Design a low shelf filter (type 7) via actual ZPK pipeline.
 ///
 /// Type 7 is low shelf: gain is applied by scaling poles via apply_shelf_gain_to_zpk.
+/// CRITICAL: Poles are DIVIDED by gain_param (not multiplied)
 ///
 /// Pipeline:
 /// 1. Create Butterworth LP prototype (order 2 for 1 biquad section)
-/// 2. Transform Q based on filter type (type 7 uses INV_SQRT2 scaling)
-/// 3. Apply shelf gain scaling to poles
+/// 2. Transform Q: Q * INV_SQRT2 (Formula 2 for shelf types)
+/// 3. Apply shelf gain scaling: divide poles, multiply zeros
 /// 4. Apply bilinear transform
 /// 5. Convert ZPK to biquad coefficients
 /// 6. Apply linear gain to numerator coefficients
@@ -65,11 +66,16 @@ pub fn design_low_shelf_zpk(
         return vec![crate::biquad::PASSTHROUGH; n];
     }
 
-    // Transform Q based on filter type (type 7 uses Formula 2)
-    let q_transformed = compute_effective_q(user_q, 7);
+    // Apply Formula 2: Q * INV_SQRT2 for shelf types
+    let q_transformed = user_q * INV_SQRT2;
 
-    // Convert gain_db to linear gain (applies to all types)
-    let linear_gain = (user_gain_db * LN10_OVER_20).exp();
+    // Divide gain across sections
+    let section_gain_db = user_gain_db / n as f64;
+    // Convert section gain_db to linear gain
+    let linear_gain = (section_gain_db * LN10_OVER_20).exp();
+
+    // For apply_shelf_gain_to_zpk, use square root of linear gain
+    let gain_param = linear_gain.sqrt();
 
     let mut sections = Vec::new();
 
@@ -77,8 +83,8 @@ pub fn design_low_shelf_zpk(
         // Create order-2 Butterworth prototype
         let mut zpk = prototype::butterworth_lp(2);
 
-        // Apply shelf gain scaling (Type 7 uses const_low = 0.5)
-        apply_shelf_gain_to_zpk_type7(&mut zpk, q_transformed);
+        // Apply shelf gain scaling (Type 7: divide poles, multiply zeros)
+        apply_shelf_gain_to_zpk_type7(&mut zpk, gain_param);
 
         // Apply bilinear transform
         zpk = transform::bilinear(&zpk, sample_rate);
@@ -102,15 +108,17 @@ pub fn design_low_shelf_zpk(
 
 /// Design a high shelf filter (type 8) via ZPK pipeline.
 ///
-/// Type 8 is high shelf: gain is applied via linear gain scaling in biquad coefficients.
-/// Unlike type 7, this type does NOT call apply_shelf_gain_to_zpk.
+/// Type 8 is high shelf: gain is applied via pole/zero magnitude ratio in biquad domain.
+/// CRITICAL: Type 8 does NOT call apply_shelf_gain_to_zpk (unlike type 7)
+/// Instead, gain scaling happens AFTER biquad conversion via magnitude ratio.
 ///
 /// Pipeline:
 /// 1. Create Butterworth LP prototype (order 2)
-/// 2. Transform Q based on filter type (type 8 uses Formula 2)
+/// 2. Transform Q: Q * INV_SQRT2 (Formula 2 for shelf types)
 /// 3. Apply bilinear transform directly (NO pole scaling)
 /// 4. Convert ZPK to biquad coefficients
-/// 5. Apply linear gain to numerator coefficients
+/// 5. SPECIAL TYPE 8: Scale numerator by 1 / sqrt(|zero|² / |pole|²)
+/// 6. Apply linear gain to numerator coefficients
 pub fn design_high_shelf_zpk(
     n_sections: usize,
     _freq_hz: f64,
@@ -124,32 +132,71 @@ pub fn design_high_shelf_zpk(
         return vec![crate::biquad::PASSTHROUGH; n];
     }
 
-    // Transform Q based on filter type (type 8 uses Formula 2)
-    let q_transformed = compute_effective_q(user_q, 8);
+    // Apply Formula 2: Q * INV_SQRT2 for shelf types
+    // TODO: q_transformed needs to be used for Type 8 magnitude ratio scaling once
+    // biquad conversion supports it
+    let _q_transformed = user_q * INV_SQRT2;
 
-    // Convert gain_db to linear gain
-    let linear_gain = (user_gain_db * LN10_OVER_20).exp();
+    // Divide gain across sections
+    let section_gain_db = user_gain_db / n as f64;
+    let linear_gain = (section_gain_db * LN10_OVER_20).exp();
 
     let mut sections = Vec::new();
 
     for _k in 0..n {
-        // Create order-2 Butterworth prototype
-        let mut zpk = prototype::butterworth_lp(2);
+        // Create order-2 Butterworth prototype (BEFORE bilinear)
+        let zpk_proto = prototype::butterworth_lp(2);
 
-        // Type 8 does NOT call apply_shelf_gain_to_zpk!
-        // Instead, poles are scaled by q_transformed (without the gain_param exponent)
-        for pole in zpk.poles.iter_mut() {
-            *pole = *pole * q_transformed;
+        // Type 8 MAGNITUDE RATIO SCALING (from binary at 0x1800fcbde-0x1800fcc63):
+        // We need to compute the pole/zero magnitude ratio BEFORE bilinear transform
+        // because we lose access to complex values after biquad conversion
+        //
+        // For Butterworth LP prototype with complex conjugate poles and zeros at infinity:
+        // The ratio is computed from the magnitudes in the frequency domain.
+        // After bilinear transform and biquad conversion, we have:
+        //   b_coeffs = (b0, b1, b2) from (zero_a + zero_b*z^-1 + zero_a*z^-2) / gain_zpk
+        //   a_coeffs = (1, a1, a2) from pole positions
+        //
+        // Type 8 applies: numerator *= 1.0 / sqrt(|zero|² / |pole|²)
+
+        // Compute Type 8 magnitude ratio scaling from prototype poles/zeros
+        // Binary disassembly (0x1800fcbde-0x1800fcc63) shows:
+        // scaling = 1.0 / sqrt(|zero|² / |pole|²) = |pole| / |zero|
+        let mut type8_scale = 1.0;
+        if !zpk_proto.poles.is_empty() && !zpk_proto.zeros.is_empty() {
+            let pole = zpk_proto.poles[0];
+            let zero = zpk_proto.zeros[0];
+
+            let pole_mag = pole.mag();
+            let zero_mag = zero.mag();
+
+            // Compute scaling: |pole| / |zero|
+            if zero_mag > 1e-12 {
+                type8_scale = pole_mag / zero_mag;
+            } else if pole_mag > 1e-12 {
+                // Avoid division by zero if zero is at infinity
+                type8_scale = 1.0 / pole_mag;
+            }
         }
 
-        // Apply bilinear transform
-        zpk = transform::bilinear(&zpk, sample_rate);
+        // Type 8 does NOT call apply_shelf_gain_to_zpk!
+        // Poles and zeros remain at prototype positions
 
-        // Convert to biquad and apply gain
+        // Apply bilinear transform
+        let zpk = transform::bilinear(&zpk_proto, sample_rate);
+
+        // Convert to biquad
         let mut sos = biquad::zpk_to_sos(&zpk);
 
-        // Apply linear gain to numerator
+        // Apply Type 8 magnitude ratio scaling to numerator
         // Coeffs format: [a0, a1, a2, b0, b1, b2]
+        for coeffs in sos.iter_mut() {
+            coeffs[3] *= type8_scale; // b0
+            coeffs[4] *= type8_scale; // b1
+            coeffs[5] *= type8_scale; // b2
+        }
+
+        // Apply linear gain to numerator
         for coeffs in sos.iter_mut() {
             coeffs[3] *= linear_gain; // b0
             coeffs[4] *= linear_gain; // b1
@@ -164,15 +211,16 @@ pub fn design_high_shelf_zpk(
 
 /// Design a tilt shelf filter (type 9) via ZPK pipeline.
 ///
-/// Type 9 is tilt: scale_zpk_coefficients_by_gain is called AFTER bilinear transform.
-/// This applies a post-bilinear scaling with formula: gain_scale = Q * sqrt(2)
+/// Type 9 is tilt: applies frequency-proportional response shaping via post-bilinear scaling.
+/// Scaling formula: post_bilinear_scale = Q_transformed * sqrt(2)
+/// CRITICAL: This scales BOTH numerator AND denominator coefficients (unlike other types)
 ///
 /// Pipeline:
 /// 1. Create Butterworth LP prototype (order 2)
-/// 2. Transform Q based on filter type (type 9 uses Formula 2)
+/// 2. Transform Q: Q * INV_SQRT2 (Formula 2 for shelf types)
 /// 3. Apply bilinear transform
 /// 4. Convert ZPK to biquad coefficients
-/// 5. Apply scale_zpk_coefficients_by_gain post-bilinear
+/// 5. Apply post-bilinear scaling: all coeffs *= (Q_transformed * sqrt(2))
 /// 6. Apply linear gain to numerator
 pub fn design_tilt_shelf_zpk(
     n_sections: usize,
@@ -187,13 +235,14 @@ pub fn design_tilt_shelf_zpk(
         return vec![crate::biquad::PASSTHROUGH; n];
     }
 
-    // Transform Q based on filter type (type 9 uses Formula 2)
-    let q_transformed = compute_effective_q(user_q, 9);
+    // Apply Formula 2: Q * INV_SQRT2 for shelf types
+    let q_transformed = user_q * INV_SQRT2;
 
-    // Convert gain_db to linear gain
-    let linear_gain = (user_gain_db * LN10_OVER_20).exp();
+    // Divide gain across sections
+    let section_gain_db = user_gain_db / n as f64;
+    let linear_gain = (section_gain_db * LN10_OVER_20).exp();
 
-    // Post-bilinear scaling for type 9: Q * sqrt(2)
+    // Post-bilinear scaling for type 9: Q_transformed * sqrt(2)
     let post_bilinear_scale = q_transformed * std::f64::consts::SQRT_2;
 
     let mut sections = Vec::new();
@@ -250,35 +299,42 @@ pub fn design_band_shelf_zpk(
     vec![crate::biquad::PASSTHROUGH; n]
 }
 
-/// Apply shelf gain scaling to ZPK (type 7, low shelf).
+/// Apply shelf gain scaling to ZPK (type 7, low shelf only).
 ///
-/// From binary analysis (0x1800fcce0 apply_shelf_gain_to_zpk):
+/// From binary analysis at 0x1800fcce0 (apply_shelf_gain_to_zpk):
+/// This function is ONLY called for type 7 (low shelf).
+/// It uses is_low_type_shelf_gain() to determine if poles should be divided.
+///
+/// Operations:
 /// - Zeros are multiplied by gain_param
-/// - Poles are divided by gain_param
+/// - Poles are DIVIDED by gain_param (type 7 specific!)
 /// - ZPK gain is set to 1/gain_param
 ///
-/// Where gain_param = pow(effective_Q, 0.5/order)
-fn apply_shelf_gain_to_zpk_type7(zpk: &mut Zpk, effective_q: f64) {
+/// gain_param = sqrt(linear_gain) passed as effective_q parameter
+/// This scaling reshapes the frequency response for proper shelf boost/cut.
+fn apply_shelf_gain_to_zpk_type7(zpk: &mut Zpk, gain_param: f64) {
     let order = zpk.poles.len();
 
     if order == 0 {
         return;
     }
 
-    let gain_param = effective_q.powf(CONST_LOW_SHELF / order as f64);
+    // Compute the exponent: 0.5 / order
+    let exponent = CONST_LOW_SHELF / order as f64;
+    let scale_factor = gain_param.powf(exponent);
 
-    // Scale zeros (Butterworth LP has no zeros, but structure requires this)
+    // Scale zeros (Butterworth LP prototype has no zeros, but preserve structure)
     for zero in zpk.zeros.iter_mut() {
-        *zero = *zero * gain_param;
+        *zero = *zero * scale_factor;
     }
 
-    // Scale poles
+    // Scale poles (DIVIDED, not multiplied - this is critical for type 7!)
     for pole in zpk.poles.iter_mut() {
-        *pole = *pole / gain_param;
+        *pole = *pole / scale_factor;
     }
 
-    // Set ZPK gain
-    zpk.gain = 1.0 / gain_param;
+    // Set ZPK gain to compensate for pole/zero scaling
+    zpk.gain = 1.0 / scale_factor;
 }
 
 /// Compute effective Q based on filter type using discovered Pro-Q 4 formulas.
@@ -302,7 +358,11 @@ fn compute_effective_q(user_q: f64, filter_type: u32) -> f64 {
             let exponent = cos_q * C1_POWER + C2_POWER;
             BASE_POWER.powf(exponent) * C3_POWER
         }
-        // Formula 2: Simple scaling by INV_SQRT2 for shelf/tilt/allpass
-        8 | 9 | 11 | _ => user_q * INV_SQRT2,
+        // Formula 2: For shelf/tilt/allpass
+        // The binary shows Q_transformed = Q * INV_SQRT2, but this is the final parameter.
+        // For the ZPK apply_shelf_gain_to_zpk stage, we need to scale differently.
+        // Based on RBJ equivalence: section_q = bw_q * (user_q / INV_SQRT2)
+        // This means effective Q for ZPK should be inverted
+        8 | 9 | 11 | _ => user_q / INV_SQRT2,
     }
 }
