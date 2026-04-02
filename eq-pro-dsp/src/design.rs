@@ -16,7 +16,7 @@ use std::f64::consts::PI;
 use crate::biquad::{self, Coeffs};
 use crate::cascade;
 use crate::prototype;
-use crate::shelf;
+use crate::shelf_zpk;
 use crate::transform;
 
 /// Filter types matching Pro-Q 4's type codes (0-12).
@@ -80,10 +80,18 @@ pub fn design_filter(
         FilterType::ShelfAlt => {
             cascade::compute_cascade_shelf_alt(freq_hz, q, gain_db, sample_rate, order)
         }
-        FilterType::LowShelf => shelf::design_low_shelf(n, freq_hz, q, gain_db, sample_rate),
-        FilterType::HighShelf => shelf::design_high_shelf(n, freq_hz, q, gain_db, sample_rate),
-        FilterType::TiltShelf => shelf::design_tilt_shelf(n, freq_hz, q, gain_db, sample_rate),
-        FilterType::BandShelf => shelf::design_band_shelf(n, freq_hz, q, gain_db, sample_rate),
+        FilterType::LowShelf => {
+            shelf_zpk::design_low_shelf_zpk(n, freq_hz, q, gain_db, sample_rate)
+        }
+        FilterType::HighShelf => {
+            shelf_zpk::design_high_shelf_zpk(n, freq_hz, q, gain_db, sample_rate)
+        }
+        FilterType::TiltShelf => {
+            shelf_zpk::design_tilt_shelf_zpk(n, freq_hz, q, gain_db, sample_rate)
+        }
+        FilterType::BandShelf => {
+            shelf_zpk::design_band_shelf_zpk(n, freq_hz, q, gain_db, sample_rate)
+        }
         FilterType::Allpass => design_allpass(n, freq_hz, q, sample_rate),
         FilterType::FlatTilt => design_flat_tilt(n, freq_hz, q, gain_db, sample_rate),
     }
