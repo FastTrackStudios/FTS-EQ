@@ -9,9 +9,7 @@ use rustfft::{num_complex::Complex, FftPlanner};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use eq_dsp::filter_type::{FilterStructure, FilterType};
-use eq_dsp::EqChain;
-use fts_dsp::{AudioConfig, Processor};
+use eq_dsp_v2::{EqChain, FilterType};
 
 pub mod editor;
 
@@ -373,7 +371,7 @@ fn lp_hp_slope_to_order(slope: i32) -> usize {
     }
 }
 
-/// Map EqBandShape integer to eq-dsp FilterType.
+/// Map EqBandShape integer to eq-dsp-v2 FilterType.
 fn shape_to_filter_type(shape: i32) -> FilterType {
     match shape {
         0 => FilterType::Peak,      // Bell
@@ -384,14 +382,14 @@ fn shape_to_filter_type(shape: i32) -> FilterType {
         5 => FilterType::Notch,     // Notch
         6 => FilterType::Bandpass,  // Bandpass
         7 => FilterType::TiltShelf, // Tilt Shelf
-        8 => FilterType::FlatTilt,  // Flat Tilt
+        8 => FilterType::TiltShelf, // Flat Tilt (use tilt shelf for now)
         9 => FilterType::Allpass,   // All Pass
         _ => FilterType::Peak,
     }
 }
 
 impl FtsEq {
-    /// Sync nih-plug params → eq-dsp bands.
+    /// Sync nih-plug params → eq-dsp-v2 bands.
     fn sync_params(&mut self) {
         // Check if any band has solo active
         let any_solo = (0..NUM_BANDS).any(|i| self.params.bands[i].solo.value() > 0.5);
@@ -401,7 +399,6 @@ impl FtsEq {
             if let Some(band) = self.chain.band_mut(i) {
                 let band_enabled = bp.enabled.value() > 0.5;
                 let is_solo = bp.solo.value() > 0.5;
-                // If any band is soloed, only soloed bands are active
                 let enabled = if any_solo {
                     band_enabled && is_solo
                 } else {
@@ -418,8 +415,6 @@ impl FtsEq {
                     FilterType::Lowpass | FilterType::Highpass | FilterType::Bandpass => {
                         lp_hp_slope_to_order(slope_val)
                     }
-                    // For shelves, slope 0 (0 dB/oct) = 1st-order.
-                    // For bell, slope 0 = same as slope 2 (12 dB/oct, order 2).
                     FilterType::LowShelf | FilterType::HighShelf | FilterType::TiltShelf
                         if slope_val == 0 =>
                     {
@@ -428,15 +423,12 @@ impl FtsEq {
                     _ => slope_to_order(slope_val),
                 };
 
-                let peak_q_comp = self.params.tune_peak_q_comp.value() as f64;
-
                 if band.enabled != enabled
                     || band.filter_type != ft
                     || (band.freq_hz - freq).abs() > 0.01
                     || (band.gain_db - gain).abs() > 0.01
                     || (band.q - q).abs() > 0.001
                     || band.order != order
-                    || (band.peak_q_comp - peak_q_comp).abs() > 0.0001
                 {
                     band.enabled = enabled;
                     band.filter_type = ft;
@@ -444,8 +436,6 @@ impl FtsEq {
                     band.gain_db = gain;
                     band.q = q;
                     band.order = order;
-                    band.peak_q_comp = peak_q_comp;
-                    band.structure = FilterStructure::Tdf2;
                     self.chain.update_band(i);
                 }
             }
@@ -576,10 +566,7 @@ impl Plugin for FtsEq {
             .sample_rate
             .store(buffer_config.sample_rate, Ordering::Relaxed);
 
-        self.chain.update(AudioConfig {
-            sample_rate: self.sample_rate,
-            max_buffer_size: buffer_config.max_buffer_size as usize,
-        });
+        self.chain.set_sample_rate(self.sample_rate);
 
         // Pre-allocate scratch buffers
         let max_samples = buffer_config.max_buffer_size as usize;

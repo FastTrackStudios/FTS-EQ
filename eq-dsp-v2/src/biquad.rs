@@ -7,7 +7,7 @@
 //!   H(z) = gain * (z - z0)(z - z0*) / ((z - p0)(z - p0*))
 //!        = gain * (1 + b1·z⁻¹ + b2·z⁻²) / (1 + a1·z⁻¹ + a2·z⁻²)
 
-use crate::zpk::{Complex, Zpk, pair_conjugates};
+use crate::zpk::{pair_conjugates, Complex, Zpk};
 
 /// Standard biquad coefficients: [a0, a1, a2, b0, b1, b2].
 /// Convention: H(z) = (b0 + b1·z⁻¹ + b2·z⁻²) / (a0 + a1·z⁻¹ + a2·z⁻²)
@@ -79,8 +79,12 @@ pub fn eval_sos(sections: &[Coeffs], w: f64) -> Complex {
     let ejw2 = ejw * ejw;
     let mut h = Complex::ONE;
     for c in sections {
-        let den = Complex::new(c[0], 0.0) + ejw * Complex::new(c[1], 0.0) + ejw2 * Complex::new(c[2], 0.0);
-        let num = Complex::new(c[3], 0.0) + ejw * Complex::new(c[4], 0.0) + ejw2 * Complex::new(c[5], 0.0);
+        let den = Complex::new(c[0], 0.0)
+            + ejw * Complex::new(c[1], 0.0)
+            + ejw2 * Complex::new(c[2], 0.0);
+        let num = Complex::new(c[3], 0.0)
+            + ejw * Complex::new(c[4], 0.0)
+            + ejw2 * Complex::new(c[5], 0.0);
         h = h * num / den;
     }
     h
@@ -112,7 +116,10 @@ mod tests {
         // Well above cutoff should be attenuated
         let w_10k = 2.0 * PI * 10000.0 / 48000.0;
         let mag_10k = mag_db_sos(&sos, w_10k);
-        assert!(mag_10k < -20.0, "10kHz should be attenuated, got {mag_10k} dB");
+        assert!(
+            mag_10k < -20.0,
+            "10kHz should be attenuated, got {mag_10k} dB"
+        );
     }
 
     #[test]
@@ -141,8 +148,14 @@ mod tests {
         let mag_dc = mag_db_sos(&sos, 0.001);
         let mag_nyq = mag_db_sos(&sos, PI - 0.001);
 
-        assert!(mag_center > mag_dc + 10.0, "center should be louder than DC");
-        assert!(mag_center > mag_nyq + 10.0, "center should be louder than Nyquist");
+        assert!(
+            mag_center > mag_dc + 10.0,
+            "center should be louder than DC"
+        );
+        assert!(
+            mag_center > mag_nyq + 10.0,
+            "center should be louder than Nyquist"
+        );
     }
 
     #[test]
@@ -155,7 +168,10 @@ mod tests {
         let mag_center = mag_db_sos(&sos, w_1k);
         let mag_dc = mag_db_sos(&sos, 0.001);
 
-        assert!(mag_center < -20.0, "center should be deeply attenuated, got {mag_center}");
+        assert!(
+            mag_center < -20.0,
+            "center should be deeply attenuated, got {mag_center}"
+        );
         assert!(mag_dc.abs() < 1.0, "DC should be ~0 dB, got {mag_dc}");
     }
 }

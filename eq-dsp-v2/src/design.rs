@@ -19,16 +19,16 @@ use crate::transform;
 ///   10 = Band Shelf, 11 = Allpass
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FilterType {
-    Peak,       // type 0 — own ZPK (compute_cascade_coefficients)
-    Highpass,   // type 1 — Butterworth direct
-    Lowpass,    // type 2 — Butterworth direct
-    Bandpass,   // type 3 — Butterworth LP + elliptic LP→BP
-    Notch,      // type 4 — Butterworth LP + LP→BS
-    LowShelf,   // type 7 — Butterworth + bilinear
-    HighShelf,  // type 8 — Butterworth + bilinear
-    TiltShelf,  // type 9 — Butterworth + bilinear
-    BandShelf,  // type 10 — LP→BP + bilinear
-    Allpass,    // type 11 — negate zeros
+    Peak,      // type 0 — own ZPK (compute_cascade_coefficients)
+    Highpass,  // type 1 — Butterworth direct
+    Lowpass,   // type 2 — Butterworth direct
+    Bandpass,  // type 3 — Butterworth LP + elliptic LP→BP
+    Notch,     // type 4 — Butterworth LP + LP→BS
+    LowShelf,  // type 7 — Butterworth + bilinear
+    HighShelf, // type 8 — Butterworth + bilinear
+    TiltShelf, // type 9 — Butterworth + bilinear
+    BandShelf, // type 10 — LP→BP + bilinear
+    Allpass,   // type 11 — negate zeros
 }
 
 /// Design a complete filter and return biquad sections.
@@ -72,12 +72,7 @@ pub fn design_filter(
 /// Butterworth lowpass: analog LP prototype → bilinear → biquads.
 ///
 /// Pro-Q 4 type 1 (HP) / type 2 (LP): transform type 0 (direct).
-fn design_lowpass(
-    n: usize,
-    freq_hz: f64,
-    q: f64,
-    sample_rate: f64,
-) -> Vec<Coeffs> {
+fn design_lowpass(n: usize, freq_hz: f64, q: f64, sample_rate: f64) -> Vec<Coeffs> {
     let proto = prototype::butterworth_lp_prewarped(2 * n, freq_hz, sample_rate);
     let digital = transform::bilinear(&proto, sample_rate);
     let mut sos = biquad::zpk_to_sos(&digital);
@@ -93,12 +88,7 @@ fn design_lowpass(
 }
 
 /// Butterworth highpass: flip the lowpass.
-fn design_highpass(
-    n: usize,
-    freq_hz: f64,
-    q: f64,
-    sample_rate: f64,
-) -> Vec<Coeffs> {
+fn design_highpass(n: usize, freq_hz: f64, q: f64, sample_rate: f64) -> Vec<Coeffs> {
     // HP = LP with z → -z (frequency inversion).
     // Easier: design LP prototype, then in bilinear use s → -s substitution.
     // Or: use HP prototype directly.
@@ -135,12 +125,7 @@ fn design_highpass(
 /// quadratic LP→BP gives equivalent results for Butterworth prototypes.
 ///
 /// KEY INSIGHT: Each section gets UNIQUE pole/zero positions (NOT identical biquads).
-fn design_bandpass(
-    n: usize,
-    freq_hz: f64,
-    q: f64,
-    sample_rate: f64,
-) -> Vec<Coeffs> {
+fn design_bandpass(n: usize, freq_hz: f64, q: f64, sample_rate: f64) -> Vec<Coeffs> {
     let bp = prototype::butterworth_bp(n, freq_hz, q, sample_rate);
     let digital = transform::bilinear(&bp, sample_rate);
     let sos = biquad::zpk_to_sos(&digital);
@@ -165,12 +150,7 @@ fn design_bandpass(
 /// Butterworth bandstop (notch): LP prototype → LP→BS transform → bilinear.
 ///
 /// Pro-Q 4 type 4: same machinery as bandpass but with BS transform.
-fn design_notch(
-    n: usize,
-    freq_hz: f64,
-    q: f64,
-    sample_rate: f64,
-) -> Vec<Coeffs> {
+fn design_notch(n: usize, freq_hz: f64, q: f64, sample_rate: f64) -> Vec<Coeffs> {
     let bs = prototype::butterworth_bs(n, freq_hz, q, sample_rate);
     let digital = transform::bilinear(&bs, sample_rate);
     let sos = biquad::zpk_to_sos(&digital);
@@ -196,13 +176,7 @@ fn design_notch(
 /// Pro-Q 4 type 0: uses compute_cascade_coefficients (own ZPK calculation).
 /// For now, use standard RBJ/Vicanek approach (same as eq-dsp v1).
 /// TODO: extract compute_cascade_coefficients from Ghidra for exact match.
-fn design_peak(
-    n: usize,
-    freq_hz: f64,
-    q: f64,
-    gain_db: f64,
-    sample_rate: f64,
-) -> Vec<Coeffs> {
+fn design_peak(n: usize, freq_hz: f64, q: f64, gain_db: f64, sample_rate: f64) -> Vec<Coeffs> {
     if gain_db.abs() < 0.001 {
         return vec![PASSTHROUGH; n.max(1)];
     }
@@ -212,7 +186,9 @@ fn design_peak(
     // For now, cascade identical peak biquads with gain/n per section.
     let gain_per = gain_db / n.max(1) as f64;
     let w0 = 2.0 * PI * freq_hz / sample_rate;
-    (0..n.max(1)).map(|_| peak_biquad(w0, q, gain_per)).collect()
+    (0..n.max(1))
+        .map(|_| peak_biquad(w0, q, gain_per))
+        .collect()
 }
 
 /// Single peak/bell biquad using RBJ cookbook.
@@ -235,12 +211,7 @@ fn peak_biquad(w0: f64, q: f64, gain_db: f64) -> Coeffs {
 /// Allpass: Butterworth poles, zeros reflected across unit circle.
 ///
 /// Pro-Q 4 type 11: transform type 4 (negate zeros).
-fn design_allpass(
-    n: usize,
-    freq_hz: f64,
-    q: f64,
-    sample_rate: f64,
-) -> Vec<Coeffs> {
+fn design_allpass(n: usize, freq_hz: f64, _q: f64, sample_rate: f64) -> Vec<Coeffs> {
     // Start with lowpass prototype
     let proto = prototype::butterworth_lp_prewarped(2 * n, freq_hz, sample_rate);
     let digital = transform::bilinear(&proto, sample_rate);
@@ -332,7 +303,9 @@ fn design_band_shelf(
 /// The first section has the highest Butterworth Q (pole pair nearest jω axis).
 /// Scale its poles to match the user's desired Q.
 fn apply_q_to_resonant_section(sos: &mut [Coeffs], q: f64, freq_hz: f64, sample_rate: f64) {
-    if sos.is_empty() { return; }
+    if sos.is_empty() {
+        return;
+    }
 
     // For the first (most resonant) section, scale the Q
     // Butterworth at order 2n has Q_0 = 1/(2·sin(π/(4n))) for the first section.
@@ -450,7 +423,10 @@ mod tests {
         let sos = design_filter(FilterType::Notch, 1000.0, 2.0, 0.0, 48000.0, 4);
         assert!(sos.len() >= 2);
         let diff = (sos[0][1] - sos[1][1]).abs() + (sos[0][2] - sos[1][2]).abs();
-        assert!(diff > 0.001, "Notch sections should differ, but diff = {diff}");
+        assert!(
+            diff > 0.001,
+            "Notch sections should differ, but diff = {diff}"
+        );
     }
 
     #[test]
@@ -459,6 +435,9 @@ mod tests {
         assert_eq!(sos.len(), 1);
         let w0 = 2.0 * PI * 1000.0 / 48000.0;
         let center = biquad::mag_db_sos(&sos, w0);
-        assert!((center - 6.0).abs() < 1.0, "peak should be ~6 dB, got {center}");
+        assert!(
+            (center - 6.0).abs() < 1.0,
+            "peak should be ~6 dB, got {center}"
+        );
     }
 }

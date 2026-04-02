@@ -25,8 +25,8 @@ pub fn process_impulse(sections: &[Coeffs], num_samples: usize) -> Vec<f64> {
 
 /// Compute magnitude response in dB from impulse response via FFT.
 pub fn impulse_to_mag_db(impulse: &[f64], num_bins: usize) -> Vec<f64> {
-    use rustfft::FftPlanner;
     use rustfft::num_complex::Complex as FftComplex;
+    use rustfft::FftPlanner;
 
     let n = num_bins * 2;
     let mut planner = FftPlanner::new();

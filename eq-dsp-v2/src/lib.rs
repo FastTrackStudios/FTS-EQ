@@ -13,11 +13,18 @@
 //!         → frequency transform based on type
 //!         → zpk_to_biquad_coefficients (0x1800fe040)
 
-pub mod zpk;
-pub mod prototype;
-pub mod transform;
+pub mod band;
 pub mod biquad;
+pub mod chain;
 pub mod design;
+pub mod prototype;
+pub mod section;
+pub mod transform;
+pub mod zpk;
+
+pub use band::Band;
+pub use chain::EqChain;
+pub use design::FilterType;
 
 #[cfg(any(test, feature = "test-util"))]
 pub mod test_util;

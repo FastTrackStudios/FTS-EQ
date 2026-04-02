@@ -6,7 +6,7 @@
 //!   - Scalar gain
 //!   - Infinity sentinel (0x7FF0000000000000) for unused poles/zeros
 
-use std::ops::{Add, Mul, Sub, Div, Neg};
+use std::ops::{Add, Div, Mul, Neg, Sub};
 
 /// A complex number for filter pole/zero calculations.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -31,7 +31,10 @@ impl Complex {
     }
 
     pub fn conj(self) -> Self {
-        Self { re: self.re, im: -self.im }
+        Self {
+            re: self.re,
+            im: -self.im,
+        }
     }
 
     pub fn mag_sq(self) -> f64 {
@@ -52,21 +55,30 @@ impl Complex {
 
     pub fn inv(self) -> Self {
         let d = self.mag_sq();
-        Self { re: self.re / d, im: -self.im / d }
+        Self {
+            re: self.re / d,
+            im: -self.im / d,
+        }
     }
 }
 
 impl Add for Complex {
     type Output = Self;
     fn add(self, rhs: Self) -> Self {
-        Self { re: self.re + rhs.re, im: self.im + rhs.im }
+        Self {
+            re: self.re + rhs.re,
+            im: self.im + rhs.im,
+        }
     }
 }
 
 impl Sub for Complex {
     type Output = Self;
     fn sub(self, rhs: Self) -> Self {
-        Self { re: self.re - rhs.re, im: self.im - rhs.im }
+        Self {
+            re: self.re - rhs.re,
+            im: self.im - rhs.im,
+        }
     }
 }
 
@@ -90,42 +102,60 @@ impl Div for Complex {
 impl Neg for Complex {
     type Output = Self;
     fn neg(self) -> Self {
-        Self { re: -self.re, im: -self.im }
+        Self {
+            re: -self.re,
+            im: -self.im,
+        }
     }
 }
 
 impl Mul<f64> for Complex {
     type Output = Self;
     fn mul(self, rhs: f64) -> Self {
-        Self { re: self.re * rhs, im: self.im * rhs }
+        Self {
+            re: self.re * rhs,
+            im: self.im * rhs,
+        }
     }
 }
 
 impl Mul<Complex> for f64 {
     type Output = Complex;
     fn mul(self, rhs: Complex) -> Complex {
-        Complex { re: self * rhs.re, im: self * rhs.im }
+        Complex {
+            re: self * rhs.re,
+            im: self * rhs.im,
+        }
     }
 }
 
 impl Div<f64> for Complex {
     type Output = Self;
     fn div(self, rhs: f64) -> Self {
-        Self { re: self.re / rhs, im: self.im / rhs }
+        Self {
+            re: self.re / rhs,
+            im: self.im / rhs,
+        }
     }
 }
 
 impl Add<f64> for Complex {
     type Output = Self;
     fn add(self, rhs: f64) -> Self {
-        Self { re: self.re + rhs, im: self.im }
+        Self {
+            re: self.re + rhs,
+            im: self.im,
+        }
     }
 }
 
 impl Sub<f64> for Complex {
     type Output = Self;
     fn sub(self, rhs: f64) -> Self {
-        Self { re: self.re - rhs, im: self.im }
+        Self {
+            re: self.re - rhs,
+            im: self.im,
+        }
     }
 }
 
@@ -189,7 +219,11 @@ pub fn pair_conjugates(zpk: &Zpk) -> Vec<(Vec<Complex>, Vec<Complex>, f64)> {
         let a_real = a.im.abs() < 1e-12;
         let b_real = b.im.abs() < 1e-12;
         if a_real != b_real {
-            return if a_real { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater };
+            return if a_real {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            };
         }
         a.im.abs().partial_cmp(&b.im.abs()).unwrap()
     });
@@ -198,7 +232,11 @@ pub fn pair_conjugates(zpk: &Zpk) -> Vec<(Vec<Complex>, Vec<Complex>, f64)> {
         let a_real = a.im.abs() < 1e-12;
         let b_real = b.im.abs() < 1e-12;
         if a_real != b_real {
-            return if a_real { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater };
+            return if a_real {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            };
         }
         a.im.abs().partial_cmp(&b.im.abs()).unwrap()
     });
@@ -212,9 +250,21 @@ pub fn pair_conjugates(zpk: &Zpk) -> Vec<(Vec<Complex>, Vec<Complex>, f64)> {
 
     let mut sections = Vec::with_capacity(n);
     for i in 0..n {
-        let pp = if i < pole_pairs.len() { pole_pairs[i].clone() } else { vec![] };
-        let zp = if i < zero_pairs.len() { zero_pairs[i].clone() } else { vec![] };
-        let g = if i == 0 { zpk.gain / gain_per.powi((n - 1) as i32) } else { gain_per };
+        let pp = if i < pole_pairs.len() {
+            pole_pairs[i].clone()
+        } else {
+            vec![]
+        };
+        let zp = if i < zero_pairs.len() {
+            zero_pairs[i].clone()
+        } else {
+            vec![]
+        };
+        let g = if i == 0 {
+            zpk.gain / gain_per.powi((n - 1) as i32)
+        } else {
+            gain_per
+        };
         sections.push((pp, zp, g));
     }
     sections
@@ -225,7 +275,9 @@ fn group_conjugate_pairs(roots: &[Complex]) -> Vec<Vec<Complex>> {
     let mut pairs = Vec::new();
 
     for i in 0..roots.len() {
-        if used[i] { continue; }
+        if used[i] {
+            continue;
+        }
         used[i] = true;
 
         if roots[i].im.abs() < 1e-12 {
@@ -246,7 +298,8 @@ fn group_conjugate_pairs(roots: &[Complex]) -> Vec<Vec<Complex>> {
             // Complex root — find its conjugate
             let conj = roots[i].conj();
             for j in (i + 1)..roots.len() {
-                if !used[j] && (roots[j].re - conj.re).abs() < 1e-12
+                if !used[j]
+                    && (roots[j].re - conj.re).abs() < 1e-12
                     && (roots[j].im - conj.im).abs() < 1e-12
                 {
                     used[j] = true;
