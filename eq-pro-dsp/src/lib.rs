@@ -31,6 +31,7 @@ pub mod constants;
 pub mod delay;
 pub mod design;
 pub mod elliptic;
+pub mod parameters;
 pub mod prototype;
 pub mod response;
 pub mod section;
