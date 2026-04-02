@@ -35,6 +35,7 @@ pub mod prototype;
 pub mod response;
 pub mod section;
 pub mod shelf;
+pub mod shelf_zpk;
 pub mod transform;
 pub mod zpk;
 
