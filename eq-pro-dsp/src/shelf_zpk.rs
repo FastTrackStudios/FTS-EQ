@@ -281,12 +281,19 @@ pub fn design_tilt_shelf_zpk(
 /// Design a band shelf filter (type 10) via ZPK pipeline.
 ///
 /// Type 10 is band shelf: similar to type 8 but with narrow banding.
+/// Band Shelf (Type 10): Elliptic LP→BP transformation with gain applied to poles/zeros.
+///
+/// Pro-Q 4's band shelf combines a bandpass filter with shelf-like gain application.
+/// Algorithm:
+/// 1. Design bandpass using elliptic LP→BP transformation
+/// 2. Apply shelf gain by scaling poles and zeros
+/// 3. Convert to biquad sections
 pub fn design_band_shelf_zpk(
     n_sections: usize,
-    _freq_hz: f64,
-    _user_q: f64,
+    freq_hz: f64,
+    user_q: f64,
     user_gain_db: f64,
-    _sample_rate: f64,
+    sample_rate: f64,
 ) -> Vec<Coeffs> {
     let n = n_sections.max(1);
 
@@ -294,9 +301,48 @@ pub fn design_band_shelf_zpk(
         return vec![crate::biquad::PASSTHROUGH; n];
     }
 
-    // TODO: Type 10 implementation
-    // For now, return passthrough
-    vec![crate::biquad::PASSTHROUGH; n]
+    // Step 1: Design elliptic bandpass prototype
+    let mut bp = crate::prototype::butterworth_bp_elliptic(n, freq_hz, user_q, sample_rate);
+
+    // Step 2: Apply shelf gain via pole/zero scaling
+    // Convert gain_db to linear and then compute the scale factor
+    let gain_linear = 10.0_f64.powf(user_gain_db / 20.0);
+
+    // For band shelf, scale poles and zeros symmetrically
+    // Higher order sections use geometric mean for smoother response
+    let scale_factor = gain_linear.powf(0.5 / bp.poles.len().max(1) as f64);
+
+    // Scale zeros by gain_factor (boost zeros outward for gain)
+    for zero in &mut bp.zeros {
+        *zero = *zero * scale_factor;
+    }
+
+    // Scale poles inversely (move inward for boost)
+    for pole in &mut bp.poles {
+        *pole = *pole / scale_factor;
+    }
+
+    // Adjust overall gain
+    bp.gain = bp.gain * gain_linear.powf(bp.poles.len() as f64 / 2.0);
+
+    // Step 3: Apply bilinear transform and convert to biquads
+    let digital = crate::transform::bilinear(&bp, sample_rate);
+    let mut sos = crate::biquad::zpk_to_sos(&digital);
+
+    // Normalize: peak gain at center frequency should match requested gain_db
+    let w0 = 2.0 * std::f64::consts::PI * freq_hz / sample_rate;
+    let peak = crate::biquad::eval_sos(&sos, w0).mag();
+    if peak > 1e-10 {
+        let gain_error = user_gain_db - 20.0 * peak.log10();
+        let scale = 10.0_f64.powf(gain_error / 20.0);
+        if let Some(first) = sos.first_mut() {
+            first[3] *= scale;
+            first[4] *= scale;
+            first[5] *= scale;
+        }
+    }
+
+    sos
 }
 
 /// Apply shelf gain scaling to ZPK (type 7, low shelf only).
