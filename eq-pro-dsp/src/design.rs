@@ -163,7 +163,7 @@ fn design_highpass(n: usize, freq_hz: f64, q: f64, sample_rate: f64) -> Vec<Coef
 /// Pro-Q 4 type 3: uses elliptic functions for exact LP->BP.
 /// Each section gets UNIQUE pole/zero positions (NOT identical biquads).
 fn design_bandpass(n: usize, freq_hz: f64, q: f64, sample_rate: f64) -> Vec<Coeffs> {
-    let bp = prototype::butterworth_bp(n, freq_hz, q, sample_rate);
+    let bp = prototype::butterworth_bp_elliptic(n, freq_hz, q, sample_rate);
     let digital = transform::bilinear(&bp, sample_rate);
     let sos = biquad::zpk_to_sos(&digital);
 
