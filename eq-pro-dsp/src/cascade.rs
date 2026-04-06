@@ -145,62 +145,38 @@ fn peak_biquad(w0: f64, q: f64, gain_db: f64) -> Coeffs {
 ///   1. Impulse-invariance poles: z = exp(-σ·w0) with σ = 0.5/(√g·Q)
 ///   2. Magnitude matching at DC (= 1), Nyquist (= analog), and center (= g²)
 ///   3. mag_sq_to_b spectral factorization for stable numerator
-/// Binary-exact peak boost: dual impulse-invariance with DC normalization.
-///
-/// Confirmed by extracting exact coefficients from Pro-Q 4 impulse responses:
-///   sigma_pole = √2/(2·A·Q) where A = √g  — verified to 4+ decimal places
-///   sigma_zero = g × sigma_pole = A·√2/(2·Q)  — ratio = g confirmed across all scenarios
-///   DC normalization: scale numerator so H(DC) = 1
-///
-/// Error vs Pro-Q 4 ground truth: <0.01 at ≤1kHz, <0.05 at 5kHz, larger near Nyquist.
 fn peak_biquad_boost(w0: f64, q: f64, g: f64) -> Coeffs {
     debug_assert!(g >= 1.0);
-    let a_val = g.sqrt();
+    let pole_q = (g.sqrt() * q).max(0.01);
+    let sigma = 0.5 / pole_q;
 
-    // Pole sigma: √2/(2·A·Q) — binary exact (confirmed by impulse response extraction)
-    let sigma_p = std::f64::consts::FRAC_1_SQRT_2 / (a_val * q).max(0.01);
-    // Zero sigma: g × pole sigma (from analog prototype: zero damping = A/Q, pole = 1/(A·Q))
-    let sigma_z = g * sigma_p;
-
-    // Denominator: impulse-invariance poles
-    let t_p = (-sigma_p * w0).exp();
-    let a1 = if sigma_p < 1.0 {
-        -2.0 * t_p * ((1.0 - sigma_p * sigma_p).sqrt() * w0).cos()
-    } else if sigma_p > 1.0 {
-        -2.0 * t_p * ((sigma_p * sigma_p - 1.0).sqrt() * w0).cosh()
+    // Impulse-invariance poles
+    let t = (-sigma * w0).exp();
+    let a1 = if sigma <= 1.0 {
+        -2.0 * t * ((1.0 - sigma * sigma).sqrt() * w0).cos()
     } else {
-        -2.0 * t_p // exactly at boundary
+        -2.0 * t * ((sigma * sigma - 1.0).sqrt() * w0).cosh()
     };
-    let a2 = t_p * t_p;
+    let a2 = t * t;
 
-    // Numerator: impulse-invariance zeros (same formula, gain-scaled sigma)
-    let t_z = (-sigma_z * w0).exp();
-    let b1_raw = if sigma_z < 1.0 {
-        -2.0 * t_z * ((1.0 - sigma_z * sigma_z).sqrt() * w0).cos()
-    } else if sigma_z > 1.0 {
-        -2.0 * t_z * ((sigma_z * sigma_z - 1.0).sqrt() * w0).cosh()
-    } else {
-        -2.0 * t_z
-    };
-    let b2_raw = t_z * t_z;
-
-    // 3-point magnitude matching using the dual-II denominator
-    // Match: DC=1, center=g², Nyquist=1 (same as Vicanek but with √2 sigma denominator)
+    // Denominator magnitude squared at key frequencies
     let a0_big = (1.0 + a1 + a2).powi(2);
     let a1_big = (1.0 - a1 + a2).powi(2);
     let a2_big = -4.0 * a2;
 
-    let p0 = 0.5 + 0.5 * w0.cos();
-    let p1 = 0.5 - 0.5 * w0.cos();
+    let p0 = 0.5 + 0.5 * w0.cos(); // phi0(w0)
+    let p1 = 0.5 - 0.5 * w0.cos(); // phi1(w0)
 
+    // Magnitude squared targets: DC=1, center=g², Nyquist=1
     let g_sq = g * g;
     let r1 = (a0_big * p0 + a1_big * p1 + a2_big * p0 * p1 * 4.0) * g_sq;
     let r2 = (-a0_big + a1_big + 4.0 * (p0 - p1) * a2_big) * g_sq;
 
-    let b0_big = a0_big; // DC = 1
+    let b0_big = a0_big; // DC = 1 → num_dc = den_dc
     let b2_big = (r1 - r2 * p1 - b0_big) / (4.0 * p1 * p1);
     let b1_big = r2 + b0_big + 4.0 * (p1 - p0) * b2_big;
 
+    // Spectral factorization: B(z) from |B(e^jw)|²
     let (b0, b1, b2) = mag_sq_to_b([b0_big, b1_big.max(0.0), b2_big]);
     [1.0, a1, a2, b0, b1, b2]
 }
