@@ -29,6 +29,9 @@ pub struct Band {
     sections: [Tdf2Section; MAX_SECTIONS],
     num_sections: usize,
     output_gain: f64,
+    /// Wet gain for peak dry/wet blend: output = input + peak_wet_gain * filtered.
+    /// From binary: apply_gain_ramp_with_modulation uses gain_linear - 1.0.
+    peak_wet_gain: f64,
     sample_rate: f64,
 }
 
@@ -45,6 +48,7 @@ impl Band {
             sections: std::array::from_fn(|_| Tdf2Section::new()),
             num_sections: 1,
             output_gain: 1.0,
+            peak_wet_gain: 0.0,
             sample_rate: 48000.0,
         }
     }
@@ -98,6 +102,28 @@ impl Band {
             }
         };
 
+        // For Peak, use binary-exact dry/wet blend architecture
+        if self.filter_type == FilterType::Peak {
+            let sos = design::design_filter(
+                self.filter_type,
+                self.freq_hz,
+                effective_q,
+                effective_gain,
+                sample_rate,
+                order,
+            );
+            self.num_sections = sos.len().min(MAX_SECTIONS);
+            for (i, coeffs) in sos.iter().enumerate().take(self.num_sections) {
+                let stable = coeffs.iter().all(|c| c.is_finite() && c.abs() < 1e12);
+                let coeffs = if stable { *coeffs } else { PASSTHROUGH };
+                self.sections[i].set_coeffs(coeffs);
+            }
+            // Binary's gain application: output = input + (gain_linear - 1) * filtered
+            self.peak_wet_gain = 10.0_f64.powf(effective_gain / 20.0) - 1.0;
+            self.output_gain = 1.0;
+            return;
+        }
+
         // Use pro design pipeline: analog prototype -> ZPK -> biquad sections
         let sos = design::design_filter(
             self.filter_type,
@@ -118,6 +144,9 @@ impl Band {
     }
 
     /// Process a single sample through all cascaded sections.
+    ///
+    /// Peak uses dry/wet blend: output = input + wet_gain * filtered
+    /// (from binary: apply_gain_ramp_with_modulation).
     #[inline]
     pub fn tick(&mut self, sample: f64, ch: usize) -> f64 {
         if !self.enabled {
@@ -128,6 +157,12 @@ impl Band {
         for i in 0..self.num_sections {
             out = self.sections[i].tick(out, ch);
         }
+
+        // Peak uses dry/wet blend: output = input + wet_gain * filtered
+        if self.filter_type == FilterType::Peak && self.peak_wet_gain.abs() > 1e-10 {
+            return sample + self.peak_wet_gain * out;
+        }
+
         out * self.output_gain
     }
 
