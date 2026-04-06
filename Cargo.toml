@@ -52,13 +52,6 @@ daw-control-sync = { git = "https://github.com/FastTrackStudios/daw.git", branch
 daw-proto = { git = "https://github.com/FastTrackStudios/daw.git", branch = "main" }
 reaper-test = { git = "https://github.com/FastTrackStudios/daw.git", branch = "main" }
 
-[patch."https://github.com/FastTrackStudios/daw.git"]
-reaper-test = { path = "../daw/crates/reaper-test" }
-
-[patch."https://github.com/FastTrackStudios/nih-plug.git"]
-nih_plug = { path = "../FTS-Plugins/forks/nih-plug" }
-nih_plug_dioxus = { path = "../FTS-Plugins/forks/nih-plug/nih_plug_dioxus" }
-
 [patch."https://github.com/DioxusLabs/blitz.git"]
 dioxus-native = { git = "https://github.com/FastTrackStudios/blitz.git", rev = "45bc77fb" }
 dioxus-native-dom = { git = "https://github.com/FastTrackStudios/blitz.git", rev = "45bc77fb" }
