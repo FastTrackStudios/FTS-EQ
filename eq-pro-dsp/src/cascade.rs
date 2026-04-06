@@ -18,14 +18,14 @@ use crate::biquad::{Coeffs, PASSTHROUGH};
 
 /// Compute cascade biquads for a peak/bell filter.
 ///
-/// Uses Vicanek matched peak EQ with per-section gain distribution.
-/// Each section gets gain_db/N dB with the same user Q.
+/// Uses the binary-exact peak formula with √2 sigma correction and
+/// per-section gain distribution. Each section gets gain_db/N dB with
+/// the same user Q.
 ///
 /// Pro-Q 4 binary (compute_cascade_coefficients @ 0x1800fec20) uses a
 /// Butterworth zero cascade at angles θ_k = π(2k+1)/(2·order) with gain
 /// accumulation ∏ 0.25/cos²(θ_k). The exact multi-section Q mapping is
-/// complex and not yet fully extracted. The Vicanek approach gives 99.3%
-/// parity for single/dual sections and ~65% for higher orders.
+/// complex and not yet fully extracted.
 pub fn compute_cascade_peak(
     freq_hz: f64,
     q: f64,
@@ -120,12 +120,17 @@ pub fn compute_cascade_shelf_alt(
     sections
 }
 
-/// Vicanek matched peak/bell biquad — anti-cramping near Nyquist.
+/// Binary-exact peak/bell biquad from Pro-Q 4's coefficient pipeline.
 ///
-/// Uses impulse-invariance poles + 3-point magnitude matching (DC, Nyquist, center).
-/// This matches Pro-Q 4's behavior: no oversampling, accurate response up to Nyquist.
+/// Uses the RBJ peak formula with the binary's exact sigma correction:
+///   sigma = 1/√2 / (√g · Q)
+///   alpha = sigma · sin(w0)
 ///
-/// For cuts: H_cut = 1/H_boost(1/g) — invert the boost transfer function.
+/// This differs from standard RBJ (alpha = sin(w0)/(2·Q)) in two ways:
+///   1. Uses 1/√2 instead of 1/2 for the sigma numerator
+///   2. Includes √g in the denominator (gain-dependent bandwidth)
+///
+/// For cuts: H_cut(z) = 1/H_boost(z, 1/g) — invert the boost transfer function.
 fn peak_biquad(w0: f64, q: f64, gain_db: f64) -> Coeffs {
     let g = 10.0_f64.powf(gain_db / 20.0); // linear gain
     if (g - 1.0).abs() < 1e-6 {
@@ -133,75 +138,54 @@ fn peak_biquad(w0: f64, q: f64, gain_db: f64) -> Coeffs {
     }
     if g < 1.0 {
         // Cut: invert the corresponding boost
-        let [_, a1b, a2b, b0b, b1b, b2b] = peak_biquad_boost(w0, q, 1.0 / g);
+        let boost = peak_biquad_boost(w0, q, 1.0 / g);
+        let [_, a1b, a2b, b0b, b1b, b2b] = boost;
         return [1.0, b1b / b0b, b2b / b0b, 1.0 / b0b, a1b / b0b, a2b / b0b];
     }
     peak_biquad_boost(w0, q, g)
 }
 
-/// Vicanek matched peak boost using impulse-invariance poles.
+/// Binary-exact peak boost biquad using bilinear alpha with √2 sigma correction.
 ///
-/// Ported from eq-dsp/src/coeff.rs (peak_2_boost). Uses:
-///   1. Impulse-invariance poles: z = exp(-σ·w0) with σ = 0.5/(√g·Q)
-///   2. Magnitude matching at DC (= 1), Nyquist (= analog), and center (= g²)
-///   3. mag_sq_to_b spectral factorization for stable numerator
+/// From Ghidra decompilation of compute_biquad_coefficients_from_poles (0x180110b50):
+///   sigma = FRAC_1_SQRT_2 / (sqrt(g) * Q)
+///   alpha = sigma * sin(w0)
+///   A = g  (linear gain)
+///
+///   b0 = 1 + alpha * A
+///   b1 = -2 * cos(w0)
+///   b2 = 1 - alpha * A
+///   a0 = 1 + alpha / A
+///   a1 = -2 * cos(w0)
+///   a2 = 1 - alpha / A
+///
+/// Normalized so a0 = 1.
 fn peak_biquad_boost(w0: f64, q: f64, g: f64) -> Coeffs {
     debug_assert!(g >= 1.0);
-    let pole_q = (g.sqrt() * q).max(0.01);
-    let sigma = 0.5 / pole_q;
 
-    // Impulse-invariance poles
-    let t = (-sigma * w0).exp();
-    let a1 = if sigma <= 1.0 {
-        -2.0 * t * ((1.0 - sigma * sigma).sqrt() * w0).cos()
-    } else {
-        -2.0 * t * ((sigma * sigma - 1.0).sqrt() * w0).cosh()
-    };
-    let a2 = t * t;
+    // A = 10^(gain_dB/40) = sqrt(g), matching the s-domain prototype H(s) = (s² + s·A/Q + 1) / (s² + s/(A·Q) + 1)
+    let a = g.sqrt();
+    let cos_w0 = w0.cos();
+    let sin_w0 = w0.sin();
 
-    // Denominator magnitude squared at key frequencies
-    let a0_big = (1.0 + a1 + a2).powi(2);
-    let a1_big = (1.0 - a1 + a2).powi(2);
-    let a2_big = -4.0 * a2;
+    // Binary-exact sigma: √2/2 / (√g · Q) = FRAC_1_SQRT_2 / (√g · Q)
+    // Here √g = A (since g = A²), so sigma = FRAC_1_SQRT_2 / (A · Q)
+    let sigma = std::f64::consts::FRAC_1_SQRT_2 / (a * q);
+    let alpha = sigma * sin_w0;
 
-    let p0 = 0.5 + 0.5 * w0.cos(); // phi0(w0)
-    let p1 = 0.5 - 0.5 * w0.cos(); // phi1(w0)
+    // Denominator coefficients (normalize by a0)
+    let a0 = 1.0 + alpha / a;
+    let a1 = -2.0 * cos_w0;
+    let a2 = 1.0 - alpha / a;
 
-    // Magnitude squared targets: DC=1, center=g², Nyquist=1
-    let g_sq = g * g;
-    let r1 = (a0_big * p0 + a1_big * p1 + a2_big * p0 * p1 * 4.0) * g_sq;
-    let r2 = (-a0_big + a1_big + 4.0 * (p0 - p1) * a2_big) * g_sq;
+    // Numerator coefficients
+    let b0 = 1.0 + alpha * a;
+    let b1 = -2.0 * cos_w0;
+    let b2 = 1.0 - alpha * a;
 
-    let b0_big = a0_big; // DC = 1 → num_dc = den_dc
-    let b2_big = (r1 - r2 * p1 - b0_big) / (4.0 * p1 * p1);
-    let b1_big = r2 + b0_big + 4.0 * (p1 - p0) * b2_big;
-
-    // Spectral factorization: B(z) from |B(e^jw)|²
-    let (b0, b1, b2) = mag_sq_to_b([b0_big, b1_big.max(0.0), b2_big]);
-    [1.0, a1, a2, b0, b1, b2]
-}
-
-/// Spectral factorization: given |B(e^jw)|² coefficients, find stable B(z).
-///
-/// big_b = [B0, B1, B2] where |B|² = B0·φ0² + B1·φ1² + B2·φ0·φ1
-fn mag_sq_to_b(big_b: [f64; 3]) -> (f64, f64, f64) {
-    let b0_sq = big_b[0].max(0.0);
-    let b1_sq = big_b[1].max(0.0);
-    let b0_sqrt = b0_sq.sqrt();
-    let b1_sqrt = b1_sq.sqrt();
-    let w = (b0_sqrt + b1_sqrt) / 2.0;
-
-    if big_b[2].abs() < 1e-30 {
-        let b0 = w;
-        let b1 = b0_sqrt - b0;
-        return (b0, b1, 0.0);
-    }
-
-    let b0 = (w + (w * w + big_b[2]).max(0.0).sqrt()) / 2.0;
-    let b0 = b0.max(1e-30);
-    let b1 = (b0_sqrt - b1_sqrt) / 2.0;
-    let b2 = -big_b[2] / (4.0 * b0);
-    (b0, b1, b2)
+    // Normalize so a0 = 1
+    let inv_a0 = 1.0 / a0;
+    [1.0, a1 * inv_a0, a2 * inv_a0, b0 * inv_a0, b1 * inv_a0, b2 * inv_a0]
 }
 
 #[cfg(test)]
