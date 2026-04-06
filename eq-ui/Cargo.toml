@@ -8,6 +8,6 @@ description = "EQ GUI — control view (spectrum + nodes) and profile theme rend
 
 [dependencies]
 audio-gui = { workspace = true }
-fts-plugin-core = { path = "../../fts-plugin-core" }
+fts-plugin-core = { workspace = true }
 eq-dsp = { path = "../eq-dsp" }
 eq-profiles = { path = "../eq-profiles" }

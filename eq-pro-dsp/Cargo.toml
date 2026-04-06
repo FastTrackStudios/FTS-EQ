@@ -6,6 +6,6 @@ license.workspace = true
 description = "EQ processing engine — Pro-Q 4 faithful extraction with elliptic transforms, cascade coefficients, and anti-cramping"
 
 [dependencies]
-fts-dsp = { path = "../../fts-dsp" }
+fts-dsp = { workspace = true }
 
 [dev-dependencies]

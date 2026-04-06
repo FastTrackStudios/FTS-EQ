@@ -11,7 +11,7 @@ crate-type = ["cdylib", "lib"]
 
 [dependencies]
 audio-gui = { workspace = true }
-fts-plugin-core = { path = "../../fts-plugin-core" }
+fts-plugin-core = { workspace = true }
 eq-pro-dsp = { path = "../eq-pro-dsp" }
 eq-profiles = { path = "../eq-profiles" }
 eq-ui = { path = "../eq-ui" }

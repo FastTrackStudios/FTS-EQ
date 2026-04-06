@@ -1,0 +1,110 @@
+[workspace]
+resolver = "2"
+members = [
+    "eq-dsp",
+    "eq-dsp-v2",
+    "eq-plugin",
+    "eq-pro-dsp",
+    "eq-profiles",
+    "eq-ui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["FastTrackStudio"]
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+# Internal crates (local paths)
+eq-dsp = { path = "eq-dsp" }
+eq-dsp-v2 = { path = "eq-dsp-v2" }
+eq-pro-dsp = { path = "eq-pro-dsp" }
+eq-profiles = { path = "eq-profiles" }
+eq-ui = { path = "eq-ui" }
+
+# Cross-repo FTS deps
+fts-dsp = { git = "https://github.com/FastTrackStudios/FTS-Audiocore.git", branch = "main" }
+fts-plugin-core = { git = "https://github.com/FastTrackStudios/FTS-Audiocore.git", branch = "main" }
+audio-gui = { git = "https://github.com/FastTrackStudios/FTS-Audiocore.git", branch = "main" }
+
+# External deps
+nih_plug = { git = "https://github.com/FastTrackStudios/nih-plug.git", branch = "reaper-embed-ui" }
+nih_plug_dioxus = { git = "https://github.com/FastTrackStudios/nih-plug.git", branch = "reaper-embed-ui" }
+atomic_float = "1.1"
+crossbeam-channel = "0.5"
+once_cell = "1.19"
+tracing = { version = "0.1", features = ["std"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "2.0"
+anyhow = "1.0"
+eyre = "0.6"
+tokio = { version = "1", features = ["sync", "rt"] }
+symphonium = { version = "0.6", default-features = false, features = ["wav", "pcm", "fft-resampler"] }
+facet = { version = "0.44" }
+facet-core = { version = "0.44" }
+facet-postcard = { version = "0.44" }
+facet-json = { version = "0.44" }
+daw = { git = "https://github.com/FastTrackStudios/daw.git", branch = "main" }
+daw-control = { git = "https://github.com/FastTrackStudios/daw.git", branch = "main" }
+daw-control-sync = { git = "https://github.com/FastTrackStudios/daw.git", branch = "main" }
+daw-proto = { git = "https://github.com/FastTrackStudios/daw.git", branch = "main" }
+reaper-test = { git = "https://github.com/FastTrackStudios/daw.git", branch = "main" }
+
+[patch."https://github.com/FastTrackStudios/daw.git"]
+reaper-test = { path = "../daw/crates/reaper-test" }
+
+[patch."https://github.com/FastTrackStudios/nih-plug.git"]
+nih_plug = { path = "../FTS-Plugins/forks/nih-plug" }
+nih_plug_dioxus = { path = "../FTS-Plugins/forks/nih-plug/nih_plug_dioxus" }
+
+[patch."https://github.com/DioxusLabs/blitz.git"]
+dioxus-native = { git = "https://github.com/FastTrackStudios/blitz.git", rev = "45bc77fb" }
+dioxus-native-dom = { git = "https://github.com/FastTrackStudios/blitz.git", rev = "45bc77fb" }
+blitz-dom = { git = "https://github.com/FastTrackStudios/blitz.git", rev = "45bc77fb" }
+blitz-html = { git = "https://github.com/FastTrackStudios/blitz.git", rev = "45bc77fb" }
+blitz-net = { git = "https://github.com/FastTrackStudios/blitz.git", rev = "45bc77fb" }
+blitz-paint = { git = "https://github.com/FastTrackStudios/blitz.git", rev = "45bc77fb" }
+blitz-traits = { git = "https://github.com/FastTrackStudios/blitz.git", rev = "45bc77fb" }
+blitz-shell = { git = "https://github.com/FastTrackStudios/blitz.git", rev = "45bc77fb" }
+stylo_taffy = { git = "https://github.com/FastTrackStudios/blitz.git", rev = "45bc77fb" }
+
+[patch.crates-io]
+dioxus-native = { git = "https://github.com/FastTrackStudios/blitz.git", rev = "45bc77fb" }
+dioxus-native-dom = { git = "https://github.com/FastTrackStudios/blitz.git", rev = "45bc77fb" }
+blitz-dom = { git = "https://github.com/FastTrackStudios/blitz.git", rev = "45bc77fb" }
+blitz-html = { git = "https://github.com/FastTrackStudios/blitz.git", rev = "45bc77fb" }
+blitz-net = { git = "https://github.com/FastTrackStudios/blitz.git", rev = "45bc77fb" }
+blitz-paint = { git = "https://github.com/FastTrackStudios/blitz.git", rev = "45bc77fb" }
+blitz-traits = { git = "https://github.com/FastTrackStudios/blitz.git", rev = "45bc77fb" }
+blitz-shell = { git = "https://github.com/FastTrackStudios/blitz.git", rev = "45bc77fb" }
+stylo_taffy = { git = "https://github.com/FastTrackStudios/blitz.git", rev = "45bc77fb" }
+stylo = { git = "https://github.com/FastTrackStudios/stylo.git", rev = "8bb8c3b" }
+selectors = { git = "https://github.com/FastTrackStudios/stylo.git", rev = "8bb8c3b" }
+anyrender = { git = "https://github.com/FastTrackStudios/anyrender.git", rev = "422b5d0" }
+anyrender_vello = { git = "https://github.com/FastTrackStudios/anyrender.git", rev = "422b5d0" }
+anyrender_vello_cpu = { git = "https://github.com/FastTrackStudios/anyrender.git", rev = "422b5d0" }
+anyrender_vello_hybrid = { git = "https://github.com/FastTrackStudios/anyrender.git", rev = "422b5d0" }
+anyrender_svg = { git = "https://github.com/FastTrackStudios/anyrender.git", rev = "422b5d0" }
+wgpu_context = { git = "https://github.com/FastTrackStudios/anyrender.git", rev = "422b5d0" }
+moire = { git = "https://github.com/FastTrackStudios/moire.git", rev = "6d856f2" }
+moire-macros-noop = { git = "https://github.com/FastTrackStudios/moire.git", rev = "6d856f2" }
+moire-runtime = { git = "https://github.com/FastTrackStudios/moire.git", rev = "6d856f2" }
+moire-tokio = { git = "https://github.com/FastTrackStudios/moire.git", rev = "6d856f2" }
+moire-trace-capture = { git = "https://github.com/FastTrackStudios/moire.git", rev = "6d856f2" }
+moire-trace-types = { git = "https://github.com/FastTrackStudios/moire.git", rev = "6d856f2" }
+moire-types = { git = "https://github.com/FastTrackStudios/moire.git", rev = "6d856f2" }
+moire-wasm = { git = "https://github.com/FastTrackStudios/moire.git", rev = "6d856f2" }
+moire-wire = { git = "https://github.com/FastTrackStudios/moire.git", rev = "6d856f2" }
+
+[patch."https://github.com/bearcove/moire"]
+moire = { git = "https://github.com/FastTrackStudios/moire.git", rev = "6d856f2" }
+moire-macros-noop = { git = "https://github.com/FastTrackStudios/moire.git", rev = "6d856f2" }
+moire-runtime = { git = "https://github.com/FastTrackStudios/moire.git", rev = "6d856f2" }
+moire-tokio = { git = "https://github.com/FastTrackStudios/moire.git", rev = "6d856f2" }
+moire-trace-capture = { git = "https://github.com/FastTrackStudios/moire.git", rev = "6d856f2" }
+moire-trace-types = { git = "https://github.com/FastTrackStudios/moire.git", rev = "6d856f2" }
+moire-types = { git = "https://github.com/FastTrackStudios/moire.git", rev = "6d856f2" }
+moire-wasm = { git = "https://github.com/FastTrackStudios/moire.git", rev = "6d856f2" }
+moire-wire = { git = "https://github.com/FastTrackStudios/moire.git", rev = "6d856f2" }

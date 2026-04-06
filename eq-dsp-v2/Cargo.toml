@@ -11,7 +11,7 @@ default = []
 test-util = ["rustfft"]
 
 [dependencies]
-fts-dsp = { path = "../../fts-dsp" }
+fts-dsp = { workspace = true }
 rustfft = { version = "6.2", optional = true }
 
 [dev-dependencies]
