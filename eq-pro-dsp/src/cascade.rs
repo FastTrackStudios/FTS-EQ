@@ -121,10 +121,71 @@ pub fn compute_cascade_shelf_alt(
     sections
 }
 
-/// Pro-Q 4 exact peak biquad using the complete 7-step s-domain pipeline.
-/// See proq4_peak module for the full implementation.
+/// Peak/bell biquad using Vicanek impulse-invariance (82.1% bell parity).
+///
+/// The proq4_peak module has the 7-step pipeline with √2 sigma (73%),
+/// but Vicanek's sigma produces better overall shape matching.
+/// See proq4_peak module for the binary-decoded pipeline.
+///
+/// For cuts: H_cut = 1/H_boost(1/g).
 fn peak_biquad(w0: f64, q: f64, gain_db: f64) -> Coeffs {
-    proq4_peak::proq4_peak(w0, q, gain_db)
+    let g = 10.0_f64.powf(gain_db / 20.0);
+    if (g - 1.0).abs() < 1e-6 {
+        return PASSTHROUGH;
+    }
+    if g < 1.0 {
+        let [_, a1b, a2b, b0b, b1b, b2b] = peak_biquad_boost(w0, q, 1.0 / g);
+        return [1.0, b1b / b0b, b2b / b0b, 1.0 / b0b, a1b / b0b, a2b / b0b];
+    }
+    peak_biquad_boost(w0, q, g)
+}
+
+/// Vicanek matched peak boost using impulse-invariance poles.
+fn peak_biquad_boost(w0: f64, q: f64, g: f64) -> Coeffs {
+    debug_assert!(g >= 1.0);
+    let pole_q = (g.sqrt() * q).max(0.01);
+    let sigma = 0.5 / pole_q;
+
+    let t = (-sigma * w0).exp();
+    let a1 = if sigma <= 1.0 {
+        -2.0 * t * ((1.0 - sigma * sigma).sqrt() * w0).cos()
+    } else {
+        -2.0 * t * ((sigma * sigma - 1.0).sqrt() * w0).cosh()
+    };
+    let a2 = t * t;
+
+    let a0_big = (1.0 + a1 + a2).powi(2);
+    let a1_big = (1.0 - a1 + a2).powi(2);
+    let a2_big = -4.0 * a2;
+
+    let p0 = 0.5 + 0.5 * w0.cos();
+    let p1 = 0.5 - 0.5 * w0.cos();
+
+    let g_sq = g * g;
+    let r1 = (a0_big * p0 + a1_big * p1 + a2_big * p0 * p1 * 4.0) * g_sq;
+    let r2 = (-a0_big + a1_big + 4.0 * (p0 - p1) * a2_big) * g_sq;
+
+    let b0_big = a0_big;
+    let b2_big = (r1 - r2 * p1 - b0_big) / (4.0 * p1 * p1);
+    let b1_big = r2 + b0_big + 4.0 * (p1 - p0) * b2_big;
+
+    let b0_sq = b0_big.max(0.0);
+    let b1_sq = b1_big.max(0.0);
+    let b0_sqrt = b0_sq.sqrt();
+    let b1_sqrt = b1_sq.sqrt();
+    let ww = (b0_sqrt + b1_sqrt) / 2.0;
+
+    let (b0, b1, b2) = if b2_big.abs() < 1e-30 {
+        (ww, b0_sqrt - ww, 0.0)
+    } else {
+        let b0 = (ww + (ww * ww + b2_big).max(0.0).sqrt()) / 2.0;
+        let b0 = b0.max(1e-30);
+        let b1 = (b0_sqrt - b1_sqrt) / 2.0;
+        let b2 = -b2_big / (4.0 * b0);
+        (b0, b1, b2)
+    };
+
+    [1.0, a1, a2, b0, b1, b2]
 }
 
 #[cfg(test)]
