@@ -21,10 +21,11 @@ use crate::biquad::{Coeffs, PASSTHROUGH};
 /// Uses Vicanek matched peak EQ with per-section gain distribution.
 /// Each section gets gain_db/N dB with the same user Q.
 ///
-/// From Pro-Q 4 binary (compute_cascade_coefficients @ 0x1800fec20):
-/// The binary uses Butterworth pole angles θ_k = π(2k+1)/(2·order) with
-/// gain accumulation 0.25/cos²(θ_k). The exact multi-section architecture
-/// differs from our approach but produces similar results for moderate orders.
+/// Pro-Q 4 binary (compute_cascade_coefficients @ 0x1800fec20) uses a
+/// Butterworth zero cascade at angles θ_k = π(2k+1)/(2·order) with gain
+/// accumulation ∏ 0.25/cos²(θ_k). The exact multi-section Q mapping is
+/// complex and not yet fully extracted. The Vicanek approach gives 99.3%
+/// parity for single/dual sections and ~65% for higher orders.
 pub fn compute_cascade_peak(
     freq_hz: f64,
     q: f64,
