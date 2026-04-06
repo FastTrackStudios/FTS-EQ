@@ -18,14 +18,13 @@ use crate::biquad::{Coeffs, PASSTHROUGH};
 
 /// Compute cascade biquads for a peak/bell filter.
 ///
-/// Uses RBJ cookbook peak EQ formula with per-section gain distribution.
-/// For multi-section cascades, gain is distributed so that each section
-/// contributes to the total response shape properly.
+/// Uses Vicanek matched peak EQ with per-section gain distribution.
+/// Each section gets gain_db/N dB with the same user Q.
 ///
-/// For `param_3` in {0, 3, 8} (standard peak modes), the gain distribution is:
-///   gain_per_section = total_gain_db / num_sections
-///
-/// This gives the familiar response shape where bandwidth narrows with order.
+/// From Pro-Q 4 binary (compute_cascade_coefficients @ 0x1800fec20):
+/// The binary uses Butterworth pole angles θ_k = π(2k+1)/(2·order) with
+/// gain accumulation 0.25/cos²(θ_k). The exact multi-section architecture
+/// differs from our approach but produces similar results for moderate orders.
 pub fn compute_cascade_peak(
     freq_hz: f64,
     q: f64,
@@ -40,10 +39,6 @@ pub fn compute_cascade_peak(
     }
 
     let w0 = 2.0 * PI * freq_hz / sample_rate;
-
-    // Exponential gain distribution: each section gets gain_db/n.
-    // This is the standard approach for cascaded parametric EQs.
-    // Pro-Q 4 uses this for param_3 in {0, 3, 8}.
     let gain_per = gain_db / n as f64;
 
     (0..n).map(|_| peak_biquad(w0, q, gain_per)).collect()
