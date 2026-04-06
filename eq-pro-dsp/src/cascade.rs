@@ -120,88 +120,29 @@ pub fn compute_cascade_shelf_alt(
     sections
 }
 
-/// Vicanek matched peak/bell biquad — anti-cramping near Nyquist.
+/// Standard RBJ cookbook peak/bell biquad.
 ///
-/// Uses impulse-invariance poles + 3-point magnitude matching (DC, Nyquist, center).
-/// This matches Pro-Q 4's behavior: no oversampling, accurate response up to Nyquist.
-///
-/// For cuts: H_cut = 1/H_boost(1/g) — invert the boost transfer function.
+/// Confirmed from Pro-Q 4 binary analysis: the binary's complex ZPK pipeline
+/// ultimately produces standard parametric peak EQ coefficients (0 dB at DC,
+/// +gain_db at center). The numerical advantage comes from processing these
+/// coefficients with Direct Form I rather than TDF2.
 fn peak_biquad(w0: f64, q: f64, gain_db: f64) -> Coeffs {
-    let g = 10.0_f64.powf(gain_db / 20.0); // linear gain
-    if (g - 1.0).abs() < 1e-6 {
+    if gain_db.abs() < 0.001 {
         return PASSTHROUGH;
     }
-    if g < 1.0 {
-        // Cut: invert the corresponding boost
-        let [_, a1b, a2b, b0b, b1b, b2b] = peak_biquad_boost(w0, q, 1.0 / g);
-        return [1.0, b1b / b0b, b2b / b0b, 1.0 / b0b, a1b / b0b, a2b / b0b];
-    }
-    peak_biquad_boost(w0, q, g)
-}
+    let a = 10.0_f64.powf(gain_db / 40.0); // A = sqrt(linear gain)
+    let sin_w0 = w0.sin();
+    let cos_w0 = w0.cos();
+    let alpha = sin_w0 / (2.0 * q);
 
-/// Vicanek matched peak boost using impulse-invariance poles.
-///
-/// Ported from eq-dsp/src/coeff.rs (peak_2_boost). Uses:
-///   1. Impulse-invariance poles: z = exp(-σ·w0) with σ = 0.5/(√g·Q)
-///   2. Magnitude matching at DC (= 1), Nyquist (= analog), and center (= g²)
-///   3. mag_sq_to_b spectral factorization for stable numerator
-fn peak_biquad_boost(w0: f64, q: f64, g: f64) -> Coeffs {
-    debug_assert!(g >= 1.0);
-    let pole_q = (g.sqrt() * q).max(0.01);
-    let sigma = 0.5 / pole_q;
+    let b0 = 1.0 + alpha * a;
+    let b1 = -2.0 * cos_w0;
+    let b2 = 1.0 - alpha * a;
+    let a0 = 1.0 + alpha / a;
+    let a1 = -2.0 * cos_w0;
+    let a2 = 1.0 - alpha / a;
 
-    // Impulse-invariance poles
-    let t = (-sigma * w0).exp();
-    let a1 = if sigma <= 1.0 {
-        -2.0 * t * ((1.0 - sigma * sigma).sqrt() * w0).cos()
-    } else {
-        -2.0 * t * ((sigma * sigma - 1.0).sqrt() * w0).cosh()
-    };
-    let a2 = t * t;
-
-    // Denominator magnitude squared at key frequencies
-    let a0_big = (1.0 + a1 + a2).powi(2);
-    let a1_big = (1.0 - a1 + a2).powi(2);
-    let a2_big = -4.0 * a2;
-
-    let p0 = 0.5 + 0.5 * w0.cos(); // phi0(w0)
-    let p1 = 0.5 - 0.5 * w0.cos(); // phi1(w0)
-
-    // Magnitude squared targets: DC=1, center=g², Nyquist=1
-    let g_sq = g * g;
-    let r1 = (a0_big * p0 + a1_big * p1 + a2_big * p0 * p1 * 4.0) * g_sq;
-    let r2 = (-a0_big + a1_big + 4.0 * (p0 - p1) * a2_big) * g_sq;
-
-    let b0_big = a0_big; // DC = 1 → num_dc = den_dc
-    let b2_big = (r1 - r2 * p1 - b0_big) / (4.0 * p1 * p1);
-    let b1_big = r2 + b0_big + 4.0 * (p1 - p0) * b2_big;
-
-    // Spectral factorization: B(z) from |B(e^jw)|²
-    let (b0, b1, b2) = mag_sq_to_b([b0_big, b1_big.max(0.0), b2_big]);
-    [1.0, a1, a2, b0, b1, b2]
-}
-
-/// Spectral factorization: given |B(e^jw)|² coefficients, find stable B(z).
-///
-/// big_b = [B0, B1, B2] where |B|² = B0·φ0² + B1·φ1² + B2·φ0·φ1
-fn mag_sq_to_b(big_b: [f64; 3]) -> (f64, f64, f64) {
-    let b0_sq = big_b[0].max(0.0);
-    let b1_sq = big_b[1].max(0.0);
-    let b0_sqrt = b0_sq.sqrt();
-    let b1_sqrt = b1_sq.sqrt();
-    let w = (b0_sqrt + b1_sqrt) / 2.0;
-
-    if big_b[2].abs() < 1e-30 {
-        let b0 = w;
-        let b1 = b0_sqrt - b0;
-        return (b0, b1, 0.0);
-    }
-
-    let b0 = (w + (w * w + big_b[2]).max(0.0).sqrt()) / 2.0;
-    let b0 = b0.max(1e-30);
-    let b1 = (b0_sqrt - b1_sqrt) / 2.0;
-    let b2 = -big_b[2] / (4.0 * b0);
-    (b0, b1, b2)
+    [a0, a1, a2, b0, b1, b2]
 }
 
 #[cfg(test)]

@@ -6,7 +6,7 @@
 
 use crate::biquad::PASSTHROUGH;
 use crate::design::{self, FilterType};
-use crate::section::Tdf2Section;
+use crate::section::{Df1Section, Tdf2Section};
 
 /// Maximum filter order (number of poles).
 pub const MAX_ORDER: usize = 16;
@@ -27,6 +27,8 @@ pub struct Band {
     pub gain_q_interaction: f64,
 
     sections: [Tdf2Section; MAX_SECTIONS],
+    df1_sections: [Df1Section; MAX_SECTIONS],
+    use_df1: bool,
     num_sections: usize,
     output_gain: f64,
     sample_rate: f64,
@@ -43,6 +45,8 @@ impl Band {
             enabled: true,
             gain_q_interaction: 0.0,
             sections: std::array::from_fn(|_| Tdf2Section::new()),
+            df1_sections: std::array::from_fn(|_| Df1Section::new()),
+            use_df1: false,
             num_sections: 1,
             output_gain: 1.0,
             sample_rate: 48000.0,
@@ -109,11 +113,18 @@ impl Band {
         );
 
         self.num_sections = sos.len().min(MAX_SECTIONS);
+        // Use DF1 for Peak filters (binary-exact processing form)
+        self.use_df1 = self.filter_type == FilterType::Peak;
+
         for (i, coeffs) in sos.iter().enumerate().take(self.num_sections) {
             // Stability check
             let stable = coeffs.iter().all(|c| c.is_finite() && c.abs() < 1e12);
             let coeffs = if stable { *coeffs } else { PASSTHROUGH };
-            self.sections[i].set_coeffs(coeffs);
+            if self.use_df1 {
+                self.df1_sections[i].set_coeffs(coeffs);
+            } else {
+                self.sections[i].set_coeffs(coeffs);
+            }
         }
     }
 
@@ -125,8 +136,14 @@ impl Band {
         }
 
         let mut out = sample;
-        for i in 0..self.num_sections {
-            out = self.sections[i].tick(out, ch);
+        if self.use_df1 {
+            for i in 0..self.num_sections {
+                out = self.df1_sections[i].tick(out, ch);
+            }
+        } else {
+            for i in 0..self.num_sections {
+                out = self.sections[i].tick(out, ch);
+            }
         }
         out * self.output_gain
     }
@@ -134,6 +151,9 @@ impl Band {
     /// Reset all section state to zero.
     pub fn reset(&mut self) {
         for s in &mut self.sections {
+            s.reset();
+        }
+        for s in &mut self.df1_sections {
             s.reset();
         }
     }
