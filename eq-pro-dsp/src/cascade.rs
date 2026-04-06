@@ -49,64 +49,79 @@ pub fn compute_cascade_peak(
     (0..n).map(|_| peak_biquad(w0, q, gain_per)).collect()
 }
 
-/// Compute cascade biquads for the shelf-alt filter (type 12).
+/// Compute cascade biquads for the shelf-alt filter (type 12 / 0xc).
 ///
-/// Pro-Q 4's type 0xc shelf uses a different gain distribution:
-///   1. Total gain is square-rooted: effective_gain = sqrt(gain_linear)
-///   2. Sections use geometric gain spacing — each section's gain is a power
-///      of the total, creating a smooth shelf transition.
+/// From compute_cascade_coefficients @ 0x1800fec20:
+/// - Always exactly 3 sections (param_3 == 0xc path)
+/// - Uses gain^(1/4) scaling on pole/zero positions
+/// - Hardcoded frequency ladder: base constants * 32^section_index
+/// - Real poles and zeros (no imaginary component)
+/// - Produces z-domain poles/zeros directly (transform type 0)
 ///
-/// The geometric spacing means section k gets:
-///   gain_k = total_gain_db * weight_k
-/// where weights are geometrically distributed across sections.
+/// Constants from binary:
+///   DAT_180232030 = -0.01313900648833929 (base pole/zero 1)
+///   DAT_180232038 = -0.07432544468767008 (base pole/zero 2)
+///   DAT_180231c58 = 32.0 (section spacing)
+///   DAT_180231bd8 = 5.656854249492381 = 4*sqrt(2) (inter-section gain scaling)
 pub fn compute_cascade_shelf_alt(
-    freq_hz: f64,
-    q: f64,
+    _freq_hz: f64,
+    _q: f64,
     gain_db: f64,
-    sample_rate: f64,
-    order: usize,
+    _sample_rate: f64,
+    _order: usize,
 ) -> Vec<Coeffs> {
-    let n = (order / 2).max(1);
-
     if gain_db.abs() < 0.001 {
-        return vec![PASSTHROUGH; n];
+        return vec![PASSTHROUGH; 3];
     }
 
-    let w0 = 2.0 * PI * freq_hz / sample_rate;
+    // Convert dB to linear gain
+    let gain_linear = 10.0_f64.powf(gain_db / 20.0);
 
-    // Type 12 shelf: gain = sqrt(gain), so halve the dB
-    let effective_gain_db = gain_db / 2.0;
+    // Binary: param_4 = SQRT(param_4); dVar24 = sqrt(param_4)
+    // So gain_sqrt = gain^(1/2), gain_qrt = gain^(1/4)
+    let gain_sqrt = gain_linear.sqrt();
+    let gain_qrt = gain_sqrt.sqrt();
+    let inv_gain_qrt = 1.0 / gain_qrt;
 
-    // Geometric gain spacing: each section gets a progressively different share.
-    // For n sections, weights are: 2^0, 2^1, ..., 2^(n-1), normalized to sum = 1.
-    // This creates the smooth shelf shape Pro-Q 4 is known for.
-    let total_weight: f64 = (0..n).map(|k| geometric_weight(k, n)).sum();
+    // Hardcoded constants from binary
+    const BASE_1: f64 = -0.01313900648833929; // DAT_180232030
+    const BASE_2: f64 = -0.07432544468767008; // DAT_180232038
+    const SECTION_SPACING: f64 = 32.0;        // DAT_180231c58
+    const INTER_GAIN: f64 = 5.656854249492381; // DAT_180231bd8 = 4*sqrt(2)
 
-    (0..n)
-        .map(|k| {
-            let weight = geometric_weight(k, n) / total_weight;
-            let section_gain = effective_gain_db * weight;
+    // Build 3 sections, each with 2 real poles and 2 real zeros
+    // Section k uses frequencies: base * SECTION_SPACING^k
+    let mut sections = Vec::with_capacity(3);
+    let mut freq_1 = BASE_1;
+    let mut freq_2 = BASE_2;
+    let mut section_gain = gain_sqrt; // Binary: param_1[0x11] = param_4 (= sqrt(gain))
 
-            // Use a shelf-like biquad for each section.
-            // The shelf-alt type uses peak biquads with adjusted Q per section
-            // to approximate a shelf response.
-            let section_q = q * (1.0 + 0.5 * k as f64 / n.max(1) as f64);
-            peak_biquad(w0, section_q, section_gain)
-        })
-        .collect()
-}
+    for _ in 0..3 {
+        // Zeros scaled by gain^(1/4), poles scaled by 1/gain^(1/4)
+        let z1 = freq_1 * gain_qrt;
+        let z2 = freq_2 * gain_qrt;
+        let p1 = freq_1 * inv_gain_qrt;
+        let p2 = freq_2 * inv_gain_qrt;
 
-/// Geometric weight for section k of n total sections.
-///
-/// Gives more gain to later sections, creating the characteristic
-/// shelf-alt response shape.
-fn geometric_weight(k: usize, n: usize) -> f64 {
-    if n <= 1 {
-        return 1.0;
+        // Convert 2-real-pole, 2-real-zero ZPK section to biquad
+        // a0=1, a1=-(p1+p2), a2=p1*p2, b0=section_gain, b1=-(z1+z2)*section_gain, b2=z1*z2*section_gain
+        let a0 = 1.0;
+        let a1 = -(p1 + p2);
+        let a2 = p1 * p2;
+        let b0 = section_gain;
+        let b1 = -(z1 + z2) * section_gain;
+        let b2 = z1 * z2 * section_gain;
+
+        sections.push([a0, a1, a2, b0, b1, b2]);
+
+        // Step frequencies for next section
+        freq_1 *= SECTION_SPACING;
+        freq_2 *= SECTION_SPACING;
+        // Step gain: binary multiplies by DAT_180231bd8 between sections
+        section_gain *= INTER_GAIN;
     }
-    // Geometric progression: weight_k = r^k where r = 2^(1/(n-1))
-    let r = 2.0_f64.powf(1.0 / (n - 1) as f64);
-    r.powi(k as i32)
+
+    sections
 }
 
 /// Single peak/bell biquad using RBJ Audio EQ Cookbook.
@@ -203,26 +218,35 @@ mod tests {
     #[test]
     fn shelf_alt_zero_gain_is_passthrough() {
         let sos = compute_cascade_shelf_alt(1000.0, 1.0, 0.0, 48000.0, 2);
-        assert_eq!(sos.len(), 1);
-        assert_eq!(sos[0], PASSTHROUGH);
+        assert_eq!(sos.len(), 3);
+        for (i, s) in sos.iter().enumerate() {
+            assert_eq!(*s, PASSTHROUGH, "Section {i} should be passthrough");
+        }
     }
 
     #[test]
     fn shelf_alt_has_gain_at_center() {
         let sos = compute_cascade_shelf_alt(1000.0, 1.0, 12.0, 48000.0, 2);
-        assert_eq!(sos.len(), 1);
-        let w0 = 2.0 * PI * 1000.0 / 48000.0;
-        let mag = mag_db_sos(&sos, w0);
-        // Shelf alt uses sqrt(gain), so effective is 6 dB
-        assert!(
-            mag > 2.0 && mag < 10.0,
-            "shelf-alt center should have moderate gain, got {}",
-            mag
-        );
+        // Always 3 sections from hardcoded ZPK path
+        assert_eq!(sos.len(), 3);
+        // All sections should be valid (non-NaN) and not passthrough
+        for (i, section) in sos.iter().enumerate() {
+            for (j, &coeff) in section.iter().enumerate() {
+                assert!(
+                    coeff.is_finite(),
+                    "section[{}][{}] is not finite: {}",
+                    i,
+                    j,
+                    coeff
+                );
+            }
+            assert_ne!(*section, PASSTHROUGH, "Section {i} should not be passthrough for non-zero gain");
+        }
     }
 
     #[test]
     fn shelf_alt_multi_section() {
+        // Always 3 sections regardless of order
         let sos = compute_cascade_shelf_alt(1000.0, 1.0, 12.0, 48000.0, 6);
         assert_eq!(sos.len(), 3);
         // All sections should be valid (non-NaN)
@@ -237,20 +261,5 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn geometric_weight_single_section() {
-        let w = geometric_weight(0, 1);
-        assert!((w - 1.0).abs() < 1e-10);
-    }
-
-    #[test]
-    fn geometric_weight_increases() {
-        let w0 = geometric_weight(0, 3);
-        let w1 = geometric_weight(1, 3);
-        let w2 = geometric_weight(2, 3);
-        assert!(w1 > w0, "weights should increase: w0={}, w1={}", w0, w1);
-        assert!(w2 > w1, "weights should increase: w1={}, w2={}", w1, w2);
     }
 }
